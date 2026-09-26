@@ -1,0 +1,10 @@
+# Name,   Type, SubType, Offset,  Size,
+esp_secure_cert, 0x3F,  ,      0xD000,  0x2000,
+nvs,             data,  nvs,   0xf000,  0x4000,
+otadata,         data,  ota,   0x13000, 0x2000,
+phy_init,        data,  phy,   0x15000, 0x1000,
+factory,         app,   factory,0x20000, 2M,
+ota_0,           app,   ota_0,  0x220000,2M,
+ota_1,           app,   ota_1,  0x420000,2M,
+nvs_key,         data,  nvs_keys,0x620000,0x1000,
+spiffs,          data,  spiffs, 0x621000,1M
