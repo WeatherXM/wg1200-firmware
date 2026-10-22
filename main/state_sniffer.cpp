@@ -936,6 +936,11 @@ void leave()
  ******************************************************************************/
 void update_ws_content()
 {
+	_view_sniffer._view_settings._dd_units_temperature.set_selected(Settings::get_temp_unit());
+	_view_sniffer._view_settings._dd_units_wind_speed.set_selected(Settings::get_wind_speed_unit());
+	_view_sniffer._view_settings._dd_units_precipitation.set_selected(Settings::get_precip_unit());
+	_view_sniffer._view_settings._dd_units_pressure.set_selected(Settings::get_press_unit());
+
 	const WindSpeedUnitDesc *wind_descr = Units::get_wind_speed_unit_desc(nullptr, Settings::get_wind_speed_unit());
 	if(NULL != wind_descr)
 	{
@@ -1061,6 +1066,7 @@ void update_ws_content()
 	else
 	{
 		_view_sniffer.empty_weather_content();
+		_view_sniffer.update_pressure(Units::convert_press(Pressure::get_latest_val(), Settings::get_press_unit()));
 		//_view_sniffer._view_settings.empty_ws_bat_level();
 	}
 }
@@ -1364,6 +1370,56 @@ void update_warning_content()
 	{
 		//Show station inactive alert
 		alert_handler(&_view_alert_ws_inactive, true);
+	}
+
+	UiCommon::unlock();
+
+	const SdLoggerStatus sd_st = WeatherLogger::get_sd_status();
+	UiCommon::lock();
+	static bool s_prev_sd_ejected = false;
+	static bool s_prev_sd_ejected_present = true;
+	if (sd_st.ejected && !sd_st.formatting)
+	{
+		const char *eject_title = sd_st.card_present ? "SD Card Ready to Eject" : "SD Card Ejected";
+		const char *eject_msg = sd_st.card_present
+			? "Safe to remove microSD card.\nLogging is paused until remounted."
+			: "Card removed. Re-insert card or\ntap Mount SD to resume logging.";
+		if (!s_prev_sd_ejected || s_prev_sd_ejected_present != sd_st.card_present)
+		{
+			_view_alert_sd_op
+				.type(UiViewAlert::View::AlertType::WARNING)
+				.icon(&UiResources::icon_alert_ws_warning)
+				.title(eject_title)
+				.msg(eject_msg)
+				.show_every_s(60)
+				.action_btn("Mount SD", []() {
+					WeatherLogger::request_sd_probe();
+				});
+		}
+		if (!s_prev_sd_ejected)
+		{
+			_view_alert_sd_op.set_last_shown_ts(0);
+			_view_alert_sd_op.show();
+			Backlight::set_backlight_level(Settings::get_idle_backlight_level(), BACKLIGHT_WAKE_SETTING_CHANGE);
+		}
+		else if (!_view_alert_sd_op.is_shown() && _view_alert_sd_op.is_time_to_show())
+		{
+			_view_alert_sd_op.show();
+			Backlight::set_backlight_level(Settings::get_idle_backlight_level(), BACKLIGHT_WAKE_SETTING_CHANGE);
+		}
+		s_prev_sd_ejected = true;
+		s_prev_sd_ejected_present = sd_st.card_present;
+	}
+	else if (s_prev_sd_ejected && !sd_st.formatting)
+	{
+		_view_alert_sd_op.action_btn(nullptr, nullptr);
+		_view_alert_sd_op.show_every_s(0);
+		_view_alert_sd_op.hide();
+		s_prev_sd_ejected = false;
+	}
+	if (false)
+	{
+		alert_handler(&_view_alert_ws_inactive, true);
 	}	
 	UiCommon::unlock();
 }
@@ -1403,6 +1459,8 @@ extern "C" {
 void bsp_show_sd_format_alert(const char* title, const char* msg, bool is_error)
 {
 	lv_port_sem_take();
+	StateSniffer::_view_alert_sd_op.action_btn(nullptr, nullptr);
+	StateSniffer::_view_alert_sd_op.show_every_s(0);
 	StateSniffer::_view_alert_sd_op.type(is_error ? UiViewAlert::View::AlertType::ERROR : UiViewAlert::View::AlertType::INFO);
 	StateSniffer::_view_alert_sd_op.title(title);
 	StateSniffer::_view_alert_sd_op.msg(msg);

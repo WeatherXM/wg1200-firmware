@@ -5,6 +5,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -21,6 +22,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "esp_attr.h"
 
 #include "app_config.h"
 #include "bsp_board.h"
@@ -31,6 +33,7 @@
 
 #include "datetime_rtc.h"
 #include "esp_log.h"
+#include "global_events.h"
 #include "settings.h"
 #include "ws/include/ws_handler.h"
 #include "ws/include/ws_gps.h"
@@ -55,6 +58,7 @@ enum WeatherFieldPresence : uint32_t {
     FIELD_PRESENT_PRECIP_CML   = 1U << 6,
     FIELD_PRESENT_PRESSURE     = 1U << 7,
     FIELD_PRESENT_SOLAR_RAD    = 1U << 8,
+    FIELD_PRESENT_UV_INDEX     = 1U << 9,
 };
 
 constexpr uint32_t REQUIRED_NON_PRECIP_FIELDS =
@@ -93,8 +97,47 @@ constexpr time_t SD_MOUNT_BACKOFF_MAX_SEC = 86400;       // 24 hours (daily)
 
 static time_t s_sd_mount_backoff_sec = SD_MOUNT_BACKOFF_INITIAL_SEC;
 static time_t s_sd_next_mount_ts = 0;
+static int64_t s_sd_next_mount_tick_sec = 0;
 static bool s_sd_probe_requested = true; // Probe once on boot
 static bool s_sd_is_mounted = false;
+static bool s_sd_hydrated = false;
+static bool s_sd_formatting = false;
+static bool s_sd_ejected = false;
+static bool s_sd_ejected_saw_removal = false;
+static bool s_sd_phys_present = false;
+static bool s_sd_phys_present_valid = false;
+
+void sync_card_status_locked()
+{
+    bsp_sdcard_status_info_t info = {};
+    bsp_sdcard_get_status_info(&info);
+    s_sd_status.ejected = s_sd_ejected;
+    if (s_sd_ejected) {
+        s_sd_status.card_present = s_sd_phys_present_valid ? s_sd_phys_present : info.present;
+        s_sd_status.card_unusable = false;
+        s_sd_status.formatting = false;
+        s_sd_status.format_progress = 0;
+        s_sd_status.card_capacity_gb = info.capacity_gb;
+        s_sd_status.card_fs_type = info.fs_type;
+        s_sd_status.card_status_reason = s_sd_status.card_present
+            ? "Ejected — safe to remove card"
+            : "SD card removed (safe)";
+        return;
+    }
+    s_sd_status.card_present = info.present;
+    s_sd_status.card_unusable = info.unusable;
+    s_sd_status.formatting = info.formatting || s_sd_formatting;
+    s_sd_status.format_progress = info.format_progress;
+    s_sd_status.card_capacity_gb = info.capacity_gb;
+    s_sd_status.card_fs_type = info.fs_type;
+    s_sd_status.card_status_reason = info.reason;
+    if (info.unusable && info.reason[0] != '\0') {
+        s_sd_status.last_error = info.reason;
+        if (s_sd_status.last_error_timestamp == 0) {
+            s_sd_status.last_error_timestamp = time(nullptr);
+        }
+    }
+}
 
 time_t calculate_next_backoff(time_t current_backoff)
 {
@@ -157,10 +200,13 @@ enum MetadataColumn : size_t {
 
 QueueHandle_t s_sd_write_queue = nullptr;
 TaskHandle_t s_sd_writer_task_handle = nullptr;
+EXT_RAM_BSS_ATTR StackType_t s_sd_writer_task_stack[SD_WRITER_TASK_STACK_SIZE] = {};
+StaticTask_t s_sd_writer_task_buffer;
 
 enum class SdWriteRequestType : uint8_t {
     WEATHER_AGGREGATE,
     GPS_METADATA,
+    FORMAT_SD,
 };
 
 struct GpsMetadataEvent {
@@ -500,42 +546,84 @@ bool ensure_sd_mounted(char *error, size_t error_len)
         s_sd_is_mounted = true;
         s_sd_mount_backoff_sec = SD_MOUNT_BACKOFF_INITIAL_SEC;
         s_sd_next_mount_ts = 0;
+        s_sd_next_mount_tick_sec = 0;
         s_sd_probe_requested = false;
         s_sd_status.mount_backoff_active = false;
         s_sd_status.next_mount_attempt_timestamp = 0;
+        sync_card_status_locked();
         return true;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        const int64_t now_tick = static_cast<int64_t>(Utils::get_tick_sec());
+        if (s_sd_ejected) {
+            sync_card_status_locked();
+            snprintf(error, error_len, "%s", s_sd_status.card_status_reason.c_str());
+            return false;
+        }
+        if (!s_sd_probe_requested && s_sd_next_mount_tick_sec > 0 && now_tick < s_sd_next_mount_tick_sec) {
+            const int64_t remaining = s_sd_next_mount_tick_sec - now_tick;
+            sync_card_status_locked();
+            if (s_sd_status.card_unusable && !s_sd_status.card_status_reason.empty()) {
+                snprintf(error, error_len, "%s", s_sd_status.card_status_reason.c_str());
+            } else {
+                snprintf(error, error_len, "SD mount backoff active (%lld s remaining)", (long long)remaining);
+            }
+            return false;
+        }
     }
 
     const esp_err_t mount_result = bsp_sdcard_init_default();
     if (mount_result != ESP_OK) {
         const time_t now = time(nullptr);
-        const time_t backoff = s_sd_mount_backoff_sec;
+        const int64_t now_tick = static_cast<int64_t>(Utils::get_tick_sec());
+        time_t backoff = 0;
+        time_t next_ts = 0;
+        bool card_unusable = false;
+        std::string card_reason;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            backoff = s_sd_mount_backoff_sec;
             s_sd_is_mounted = false;
             s_sd_probe_requested = false;
-            s_sd_next_mount_ts = (now > 0 ? now : s_last_aggregated_interval) + backoff;
+            s_sd_next_mount_tick_sec = now_tick + backoff;
+            next_ts = (now > 1700000000 ? now : s_last_aggregated_interval) + backoff;
+            s_sd_next_mount_ts = next_ts;
             s_sd_mount_backoff_sec = calculate_next_backoff(backoff);
             s_sd_status.mount_backoff_active = true;
             s_sd_status.next_mount_attempt_timestamp = s_sd_next_mount_ts;
+            sync_card_status_locked();
+            card_unusable = s_sd_status.card_unusable;
+            card_reason = s_sd_status.card_status_reason;
         }
-        ESP_LOGI(TAG, "SD mount failed (%s); backing off next mount attempt for %lld s (next at %lld)",
-                 esp_err_to_name(mount_result), (long long)backoff, (long long)s_sd_next_mount_ts);
-        snprintf(error, error_len, "SD mount failed: %s (backing off for %lld s)",
-                 esp_err_to_name(mount_result), (long long)backoff);
+        if (card_unusable && !card_reason.empty()) {
+            ESP_LOGW(TAG, "SD card unusable (%s); backing off next mount attempt for %lld s",
+                     card_reason.c_str(), (long long)backoff);
+            snprintf(error, error_len, "%s", card_reason.c_str());
+        } else {
+            ESP_LOGI(TAG, "SD mount failed (%s); backing off next mount attempt for %lld s (next at %lld)",
+                     esp_err_to_name(mount_result), (long long)backoff, (long long)next_ts);
+            snprintf(error, error_len, "SD mount failed: %s (backing off for %lld s)",
+                     esp_err_to_name(mount_result), (long long)backoff);
+        }
         return false;
     }
     if (stat("/sdcard", &st) != 0 || !S_ISDIR(st.st_mode)) {
         const time_t now = time(nullptr);
-        const time_t backoff = s_sd_mount_backoff_sec;
+        const int64_t now_tick = static_cast<int64_t>(Utils::get_tick_sec());
+        time_t backoff = 0;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            backoff = s_sd_mount_backoff_sec;
             s_sd_is_mounted = false;
             s_sd_probe_requested = false;
-            s_sd_next_mount_ts = (now > 0 ? now : s_last_aggregated_interval) + backoff;
+            s_sd_next_mount_tick_sec = now_tick + backoff;
+            s_sd_next_mount_ts = (now > 1700000000 ? now : s_last_aggregated_interval) + backoff;
             s_sd_mount_backoff_sec = calculate_next_backoff(backoff);
             s_sd_status.mount_backoff_active = true;
             s_sd_status.next_mount_attempt_timestamp = s_sd_next_mount_ts;
+            sync_card_status_locked();
         }
         ESP_LOGW(TAG, "SD mount returned success but /sdcard is unavailable; backing off for %lld s",
                  (long long)backoff);
@@ -548,9 +636,11 @@ bool ensure_sd_mounted(char *error, size_t error_len)
         s_sd_is_mounted = true;
         s_sd_mount_backoff_sec = SD_MOUNT_BACKOFF_INITIAL_SEC;
         s_sd_next_mount_ts = 0;
+        s_sd_next_mount_tick_sec = 0;
         s_sd_probe_requested = false;
         s_sd_status.mount_backoff_active = false;
         s_sd_status.next_mount_attempt_timestamp = 0;
+        sync_card_status_locked();
     }
     return true;
 }
@@ -597,7 +687,9 @@ bool append_csv_once(const char *path, const char *header, const char *row,
             std::lock_guard<std::mutex> lock(s_mutex);
             s_sd_is_mounted = false;
             const time_t now = time(nullptr);
+            const int64_t now_tick = static_cast<int64_t>(Utils::get_tick_sec());
             s_sd_next_mount_ts = (now > 0 ? now : s_last_aggregated_interval) + s_sd_mount_backoff_sec;
+            s_sd_next_mount_tick_sec = now_tick + s_sd_mount_backoff_sec;
             s_sd_mount_backoff_sec = calculate_next_backoff(s_sd_mount_backoff_sec);
             s_sd_status.mount_backoff_active = true;
             s_sd_status.next_mount_attempt_timestamp = s_sd_next_mount_ts;
@@ -703,7 +795,9 @@ bool append_csv_once(const char *path, const char *header, const char *row,
         std::lock_guard<std::mutex> lock(s_mutex);
         s_sd_is_mounted = false;
         const time_t now = time(nullptr);
+        const int64_t now_tick = static_cast<int64_t>(Utils::get_tick_sec());
         s_sd_next_mount_ts = (now > 0 ? now : s_last_aggregated_interval) + s_sd_mount_backoff_sec;
+        s_sd_next_mount_tick_sec = now_tick + s_sd_mount_backoff_sec;
         s_sd_mount_backoff_sec = calculate_next_backoff(s_sd_mount_backoff_sec);
         s_sd_status.mount_backoff_active = true;
         s_sd_status.next_mount_attempt_timestamp = s_sd_next_mount_ts;
@@ -1053,26 +1147,194 @@ void accumulate_daily_metadata_in_memory(DailyMetadataState &state,
 bool can_attempt_sd_write()
 {
     std::lock_guard<std::mutex> lock(s_mutex);
+    if (s_sd_ejected || s_sd_formatting) {
+        return false;
+    }
     if (s_sd_is_mounted) {
         return true;
     }
     struct stat st = {};
     if (stat("/sdcard", &st) == 0 && S_ISDIR(st.st_mode)) {
         s_sd_is_mounted = true;
+        s_sd_next_mount_tick_sec = 0;
+        s_sd_next_mount_ts = 0;
         s_sd_status.mount_backoff_active = false;
         s_sd_status.next_mount_attempt_timestamp = 0;
+        sync_card_status_locked();
         return true;
     }
     if (s_sd_probe_requested) {
         return true;
     }
-    const time_t now = time(nullptr);
-    if (s_sd_next_mount_ts == 0 || (now > 0 && now >= s_sd_next_mount_ts)) {
+    const int64_t now_tick = static_cast<int64_t>(Utils::get_tick_sec());
+    if (s_sd_next_mount_tick_sec == 0 || now_tick >= s_sd_next_mount_tick_sec) {
         return true;
+    }
+    const time_t now = time(nullptr);
+    const int64_t remaining = s_sd_next_mount_tick_sec - now_tick;
+    if (now > 1700000000) {
+        s_sd_next_mount_ts = now + remaining;
     }
     s_sd_status.mount_backoff_active = true;
     s_sd_status.next_mount_attempt_timestamp = s_sd_next_mount_ts;
     return false;
+}
+
+float parse_csv_float_token(const char *str)
+{
+    if (str == nullptr || str[0] == '\0' || str[0] == '\r' || str[0] == '\n') {
+        return NAN;
+    }
+    char *endptr = nullptr;
+    float val = strtof(str, &endptr);
+    if (endptr == str || !std::isfinite(val)) {
+        return NAN;
+    }
+    return val;
+}
+
+bool parse_history_csv_line(char *line, int8_t tz_hours, WeatherAggregate &out_agg)
+{
+    if (line == nullptr || line[0] == '\0') return false;
+    if (strncmp(line, "LocalTimestamp", 14) == 0) return false;
+
+    const char *cols[11] = {};
+    size_t col_idx = 0;
+    char *cursor = line;
+    cols[col_idx++] = cursor;
+    while (*cursor != '\0' && col_idx < 11) {
+        if (*cursor == ',') {
+            *cursor = '\0';
+            cols[col_idx++] = cursor + 1;
+        } else if (*cursor == '\r' || *cursor == '\n') {
+            *cursor = '\0';
+            break;
+        }
+        cursor++;
+    }
+    while (*cursor != '\0') {
+        if (*cursor == '\r' || *cursor == '\n') {
+            *cursor = '\0';
+            break;
+        }
+        cursor++;
+    }
+    if (col_idx < 11) return false;
+
+    char *ts_end = nullptr;
+    long long unix_ts = strtoll(cols[1], &ts_end, 10);
+    if (ts_end == cols[1] || unix_ts <= 0) return false;
+
+    out_agg = WeatherAggregate();
+    out_agg.timestamp = static_cast<time_t>(unix_ts);
+    out_agg.temp_avg = parse_csv_float_token(cols[2]);
+    out_agg.hum_avg = parse_csv_float_token(cols[3]);
+    out_agg.wind_speed_avg = parse_csv_float_token(cols[4]);
+    out_agg.wind_dir_prevailing = parse_csv_float_token(cols[5]);
+    out_agg.wind_gust_max = parse_csv_float_token(cols[6]);
+    out_agg.precip_avg = parse_csv_float_token(cols[7]);
+    out_agg.precip_accum = parse_csv_float_token(cols[8]);
+    out_agg.pressure_avg = parse_csv_float_token(cols[9]);
+    out_agg.solar_rad_avg = parse_csv_float_token(cols[10]);
+    out_agg.timezone_offset_hours = tz_hours;
+    out_agg.valid = true;
+    return true;
+}
+
+void hydrate_aggregates_from_sd(SdWriterContext *context)
+{
+    if (context == nullptr || !DatetimeRtc::cur_time_valid()) {
+        return;
+    }
+
+    const time_t now = time(nullptr);
+    if (now <= 86400) {
+        return;
+    }
+
+    bsp_spi_lock();
+    if (!ensure_sd_mounted(context->error, SD_WRITER_ERROR_BUFFER_SIZE)) {
+        bsp_spi_unlock();
+        return;
+    }
+
+    const int tz_hours = normalized_timezone_offset(Settings::get_tz_offset());
+    char date_yesterday[16] = {};
+    char date_today[16] = {};
+    char dummy_ts[40] = {};
+    char dummy_tz[16] = {};
+    format_local_time(now - 86400, tz_hours, date_yesterday, sizeof(date_yesterday),
+                      dummy_ts, sizeof(dummy_ts), dummy_tz, sizeof(dummy_tz));
+    format_local_time(now, tz_hours, date_today, sizeof(date_today),
+                      dummy_ts, sizeof(dummy_ts), dummy_tz, sizeof(dummy_tz));
+
+    const char *dates[2] = { date_yesterday, date_today };
+    const size_t date_count = (strcmp(date_yesterday, date_today) == 0) ? 1 : 2;
+    const time_t cutoff_ts = now - 86400;
+    const time_t max_ts = now + 3600;
+
+    std::vector<WeatherAggregate> loaded;
+    loaded.reserve(MAX_AGGREGATES);
+
+    for (size_t d = 0; d < date_count; ++d) {
+        snprintf(context->csv_path, CSV_PATH_BUFFER_SIZE, "/sdcard/history_v1_%s.csv", dates[d]);
+        FILE *file = fopen(context->csv_path, "r");
+        if (file == nullptr) {
+            continue;
+        }
+        while (fgets(context->csv_row, CSV_ROW_BUFFER_SIZE, file) != nullptr) {
+            WeatherAggregate agg;
+            if (parse_history_csv_line(context->csv_row, static_cast<int8_t>(tz_hours), agg)) {
+                if (agg.timestamp >= cutoff_ts && agg.timestamp <= max_ts) {
+                    loaded.push_back(agg);
+                }
+            }
+        }
+        fclose(file);
+    }
+
+    bsp_spi_unlock();
+
+    if (loaded.empty()) {
+        return;
+    }
+
+    size_t hydrated_count = 0;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for (const auto &item : loaded) {
+            bool exists = false;
+            for (const auto &existing : s_aggregates) {
+                if (existing.timestamp == item.timestamp) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                s_aggregates.push_back(item);
+                hydrated_count++;
+            }
+        }
+        std::sort(s_aggregates.begin(), s_aggregates.end(),
+                  [](const WeatherAggregate &a, const WeatherAggregate &b) {
+                      return a.timestamp < b.timestamp;
+                  });
+        if (s_aggregates.size() > MAX_AGGREGATES) {
+            s_aggregates.erase(s_aggregates.begin(),
+                               s_aggregates.begin() + (s_aggregates.size() - MAX_AGGREGATES));
+        }
+    }
+
+    if (hydrated_count > 0) {
+        ESP_LOGI(TAG, "Hydrated %u 5-minute weather rows from SD card (total in-memory: %u)",
+                 static_cast<unsigned int>(hydrated_count),
+                 static_cast<unsigned int>(loaded.size()));
+        GlobalEvents::UiEvent ui_ev = {
+            GlobalEvents::UiEventType::WS_UPDATE_CONTENT,
+            Utils::get_tick_sec()
+        };
+        GlobalEvents::publish(GlobalEvents::EventId::UI_EVENT, &ui_ev, sizeof(ui_ev));
+    }
 }
 
 void sd_writer_task(void *)
@@ -1099,15 +1361,74 @@ void sd_writer_task(void *)
 
     bool stack_headroom_logged = false;
     for (;;) {
+        if (s_sd_formatting) {
+            WeatherLogger::format_sd();
+            continue;
+        }
+        if (!s_sd_is_mounted) {
+            bsp_spi_lock();
+            const bool phys_present = bsp_sdcard_is_inserted();
+            bsp_spi_unlock();
+            std::lock_guard<std::mutex> lock(s_mutex);
+            const bool prev_present = s_sd_phys_present_valid ? s_sd_phys_present : phys_present;
+            s_sd_phys_present = phys_present;
+            s_sd_phys_present_valid = true;
+            if (s_sd_ejected) {
+                if (!phys_present) {
+                    s_sd_ejected_saw_removal = true;
+                } else if (s_sd_ejected_saw_removal) {
+                    ESP_LOGI(TAG, "SD card re-inserted after eject; scheduling remount");
+                    s_sd_ejected = false;
+                    s_sd_ejected_saw_removal = false;
+                    s_sd_probe_requested = true;
+                    s_sd_hydrated = false;
+                    s_sd_next_mount_ts = 0;
+                    s_sd_next_mount_tick_sec = 0;
+                    s_sd_mount_backoff_sec = SD_MOUNT_BACKOFF_INITIAL_SEC;
+                }
+            } else if (!prev_present && phys_present) {
+                ESP_LOGI(TAG, "SD card insertion detected; scheduling mount probe");
+                s_sd_probe_requested = true;
+                s_sd_hydrated = false;
+                s_sd_ejected = false;
+                s_sd_ejected_saw_removal = false;
+                s_sd_next_mount_ts = 0;
+                s_sd_next_mount_tick_sec = 0;
+                s_sd_mount_backoff_sec = SD_MOUNT_BACKOFF_INITIAL_SEC;
+            }
+            sync_card_status_locked();
+        }
+
+        if (s_sd_probe_requested && can_attempt_sd_write()) {
+            bsp_spi_lock();
+            const bool mounted = ensure_sd_mounted(context->error, SD_WRITER_ERROR_BUFFER_SIZE);
+            bsp_spi_unlock();
+            if (mounted && !s_sd_hydrated && DatetimeRtc::cur_time_valid()) {
+                s_sd_hydrated = true;
+                hydrate_aggregates_from_sd(context.get());
+            }
+        } else if (!s_sd_hydrated && DatetimeRtc::cur_time_valid() && can_attempt_sd_write()) {
+            s_sd_hydrated = true;
+            hydrate_aggregates_from_sd(context.get());
+        }
+
         SdWriteRequest &request = context->request;
         DailyMetadataState &daily_metadata = context->daily_metadata;
         char *error = context->error;
-        if (xQueueReceive(s_sd_write_queue, &request, portMAX_DELAY) != pdTRUE) {
+        const TickType_t wait_ticks = ((s_sd_probe_requested || !s_sd_hydrated) && can_attempt_sd_write())
+            ? pdMS_TO_TICKS(2000)
+            : pdMS_TO_TICKS(1000);
+        if (xQueueReceive(s_sd_write_queue, &request, wait_ticks) != pdTRUE) {
+            continue;
+        }
+
+        if (request.type == SdWriteRequestType::FORMAT_SD || s_sd_formatting) {
+            WeatherLogger::format_sd();
             continue;
         }
 
         if (!can_attempt_sd_write()) {
-            if (request.type != SdWriteRequestType::GPS_METADATA) {
+            if (request.type == SdWriteRequestType::WEATHER_AGGREGATE) {
                 accumulate_daily_metadata_in_memory(daily_metadata, request.aggregate);
             }
             continue;
@@ -1213,8 +1534,12 @@ void init()
 #ifndef CONFIG_SCREENLESS
     s_sd_mount_backoff_sec = SD_MOUNT_BACKOFF_INITIAL_SEC;
     s_sd_next_mount_ts = 0;
+    s_sd_next_mount_tick_sec = 0;
     s_sd_probe_requested = true;
     s_sd_is_mounted = false;
+    s_sd_hydrated = false;
+    s_sd_ejected = false;
+    s_sd_ejected_saw_removal = false;
 #endif
 
 #ifndef CONFIG_SCREENLESS
@@ -1225,11 +1550,11 @@ void init()
         set_status_error_locked("Could not create SD writer queue");
         ESP_LOGE(TAG, "%s", s_sd_status.last_error.c_str());
     } else if (s_sd_writer_task_handle == nullptr) {
-        const BaseType_t created = xTaskCreatePinnedToCore(
+        s_sd_writer_task_handle = xTaskCreateStaticPinnedToCore(
             sd_writer_task, "sd_writer", SD_WRITER_TASK_STACK_SIZE, nullptr,
-            SD_WRITER_TASK_PRIORITY, &s_sd_writer_task_handle, 0);
-        if (created != pdPASS) {
-            s_sd_writer_task_handle = nullptr;
+            SD_WRITER_TASK_PRIORITY, s_sd_writer_task_stack,
+            &s_sd_writer_task_buffer, 0);
+        if (s_sd_writer_task_handle == nullptr) {
             set_status_error_locked("Could not create low-priority SD writer task");
             ESP_LOGE(TAG, "%s", s_sd_status.last_error.c_str());
         }
@@ -1255,6 +1580,20 @@ void push_raw(const WsFields::FieldPack *pack)
     }
 
     if (!DatetimeRtc::cur_time_valid()) {
+        if (!pack->bad_values_detected) {
+            float cml = 0.0f;
+            if (WsFields::get_field_val_from_pack(
+                    const_cast<WsFields::FieldPack *>(pack),
+                    WsFields::FieldType::WEATHER_PRECIP_CML, nullptr,
+                    &cml) == WsCommon::RetRes::OK && std::isfinite(cml)) {
+                uint32_t pkt_sta_id = 0;
+                WsFields::get_field_val_from_pack(
+                    const_cast<WsFields::FieldPack *>(pack),
+                    WsFields::FieldType::META_ID, nullptr, &pkt_sta_id);
+                s_last_precip_cml = cml;
+                s_last_precip_station_id = pkt_sta_id;
+            }
+        }
         return;
     }
 
@@ -1279,6 +1618,8 @@ void push_raw(const WsFields::FieldPack *pack)
         int temp_count = 0, hum_count = 0, wind_count = 0, direction_count = 0;
         int gust_count = 0, precip_count = 0, pressure_count = 0, solar_count = 0;
         int rssi_sum = 0, rssi_count = 0;
+        uint8_t uv_max = 0;
+        bool uv_available = false;
 
         float precip_accum_slot = 0.0f;
         bool cumulative_precip_found = false;
@@ -1449,6 +1790,14 @@ void push_raw(const WsFields::FieldPack *pack)
             if (WsFields::get_field_val_from_pack(&raw, WsFields::FieldType::WEATHER_SOLAR_RAD, nullptr, &value) == WsCommon::RetRes::OK) {
                 solar_sum += value; solar_count++; field_presence |= FIELD_PRESENT_SOLAR_RAD;
             }
+            uint8_t packet_uv = 0;
+            if (WsFields::get_field_val_from_pack(&raw, WsFields::FieldType::WEATHER_UV_INDEX, nullptr, &packet_uv) == WsCommon::RetRes::OK) {
+                if (!uv_available || packet_uv > uv_max) {
+                    uv_max = packet_uv;
+                }
+                uv_available = true;
+                field_presence |= FIELD_PRESENT_UV_INDEX;
+            }
         }
 
         if (!cumulative_precip_found && precip_count > 0) {
@@ -1459,7 +1808,7 @@ void push_raw(const WsFields::FieldPack *pack)
         const bool any_weather_data = temp_count > 0 || hum_count > 0 ||
             wind_count > 0 || direction_count > 0 || gust_count > 0 ||
             precip_count > 0 || cumulative_precip_found || pressure_count > 0 ||
-            solar_count > 0;
+            solar_count > 0 || uv_available;
         if (!any_weather_data) {
             continue;
         }
@@ -1481,6 +1830,8 @@ void push_raw(const WsFields::FieldPack *pack)
         agg.precip_accum = (cumulative_precip_found || precip_count > 0) ? precip_accum_slot : NAN;
         agg.pressure_avg = pressure_count > 0 ? press_sum / pressure_count : NAN;
         agg.solar_rad_avg = solar_count > 0 ? solar_sum / solar_count : NAN;
+        agg.uv_max = uv_max;
+        agg.uv_available = uv_available;
 
         agg.station_id = station_id;
         agg.paired_station_id = WsHandler::get_paired_id();
@@ -1594,15 +1945,24 @@ std::vector<WeatherAggregate> get_aggregates()
 SdLoggerStatus get_sd_status()
 {
     std::lock_guard<std::mutex> lock(s_mutex);
-    SdLoggerStatus status = s_sd_status;
 #ifndef CONFIG_SCREENLESS
+    sync_card_status_locked();
+    SdLoggerStatus status = s_sd_status;
     if (s_sd_write_queue != nullptr) {
         status.pending_records = uxQueueMessagesWaiting(s_sd_write_queue);
     }
+    const int64_t now_tick_sec = static_cast<int64_t>(Utils::get_tick_sec());
     const time_t now = time(nullptr);
-    status.mount_backoff_active = !s_sd_is_mounted && s_sd_next_mount_ts > 0 &&
-                                  (now <= 0 || now < s_sd_next_mount_ts);
-    status.next_mount_attempt_timestamp = status.mount_backoff_active ? s_sd_next_mount_ts : 0;
+    status.mount_backoff_active = !s_sd_is_mounted && !s_sd_ejected && s_sd_next_mount_tick_sec > 0 &&
+                                  now_tick_sec < s_sd_next_mount_tick_sec;
+    if (status.mount_backoff_active && now > 0) {
+        status.next_mount_attempt_timestamp =
+            now + static_cast<time_t>(s_sd_next_mount_tick_sec - now_tick_sec);
+    } else {
+        status.next_mount_attempt_timestamp = 0;
+    }
+#else
+    SdLoggerStatus status = s_sd_status;
 #endif
     return status;
 }
@@ -1612,6 +1972,9 @@ bool is_sd_mounted()
 #ifdef CONFIG_SCREENLESS
     return false;
 #else
+    if (s_sd_formatting || s_sd_ejected) {
+        return false;
+    }
     struct stat st = {};
     const bool mounted = stat("/sdcard", &st) == 0 && S_ISDIR(st.st_mode);
     std::lock_guard<std::mutex> lock(s_mutex);
@@ -1626,6 +1989,17 @@ bool format_sd()
     ESP_LOGW(TAG, "SD card formatting is not supported on screenless targets");
     return false;
 #else
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_sd_formatting = true;
+        s_sd_is_mounted = false;
+        s_sd_status.formatting = true;
+        s_sd_status.format_progress = 1;
+        s_sd_ejected = false;
+        s_sd_ejected_saw_removal = false;
+        s_sd_status.ejected = false;
+        s_sd_status.card_status_reason = "Formatting SD card (FAT32)...";
+    }
     Utils::set_idle_task_watchdog_state(false);
     bsp_spi_lock();
     ESP_LOGI(TAG, "Formatting SD Card...");
@@ -1635,22 +2009,64 @@ bool format_sd()
     if (result == ESP_OK) {
         ESP_LOGI(TAG, "SD Card formatted successfully");
         std::lock_guard<std::mutex> lock(s_mutex);
+        s_sd_formatting = false;
         s_sd_is_mounted = true;
         s_sd_mount_backoff_sec = SD_MOUNT_BACKOFF_INITIAL_SEC;
         s_sd_next_mount_ts = 0;
+        s_sd_next_mount_tick_sec = 0;
         s_sd_probe_requested = false;
+        s_sd_hydrated = true;
         s_sd_status.mount_backoff_active = false;
         s_sd_status.next_mount_attempt_timestamp = 0;
         s_sd_status.last_error.clear();
         s_sd_status.last_error_timestamp = 0;
+        sync_card_status_locked();
         return true;
     }
 
     char error[160];
     snprintf(error, sizeof(error), "SD format failed: %s", esp_err_to_name(result));
-    set_status_error(error);
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_sd_formatting = false;
+        sync_card_status_locked();
+        if (!s_sd_status.card_status_reason.empty()) {
+            set_status_error_locked(s_sd_status.card_status_reason.c_str());
+        } else {
+            set_status_error_locked(error);
+        }
+    }
     ESP_LOGE(TAG, "%s", error);
     return false;
+#endif
+}
+
+bool start_format_sd_async()
+{
+#ifdef CONFIG_SCREENLESS
+    return false;
+#else
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_sd_formatting || s_sd_status.formatting) {
+            return true;
+        }
+        if (s_sd_writer_task_handle == nullptr || s_sd_write_queue == nullptr) {
+            return false;
+        }
+        s_sd_formatting = true;
+        s_sd_is_mounted = false;
+        s_sd_status.formatting = true;
+        s_sd_status.format_progress = 1;
+        s_sd_ejected = false;
+        s_sd_ejected_saw_removal = false;
+        s_sd_status.ejected = false;
+        s_sd_status.card_status_reason = "Formatting SD card (FAT32)...";
+    }
+    SdWriteRequest req;
+    req.type = SdWriteRequestType::FORMAT_SD;
+    xQueueSendToFront(s_sd_write_queue, &req, 0);
+    return true;
 #endif
 }
 
@@ -1659,6 +2075,9 @@ std::vector<std::pair<std::string, size_t>> list_sd_files()
 #ifdef CONFIG_SCREENLESS
     return {};
 #else
+    if (s_sd_formatting || s_sd_ejected) {
+        return {};
+    }
     bsp_spi_lock();
     std::vector<std::pair<std::string, size_t>> files;
     DIR *dir = opendir("/sdcard");
@@ -1690,6 +2109,9 @@ bool delete_sd_file(const std::string &filename)
     (void)filename;
     return false;
 #else
+    if (s_sd_formatting || s_sd_ejected) {
+        return false;
+    }
     bsp_spi_lock();
     const std::string filepath = "/sdcard/" + filename;
     const bool result = unlink(filepath.c_str()) == 0;
@@ -1700,6 +2122,81 @@ bool delete_sd_file(const std::string &filename)
 #endif
 }
 
+bool eject_sd()
+{
+#ifdef CONFIG_SCREENLESS
+    return false;
+#else
+    bsp_spi_lock();
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_sd_formatting) {
+            bsp_spi_unlock();
+            return false;
+        }
+        s_sd_is_mounted = false;
+        s_sd_ejected = true;
+        s_sd_probe_requested = false;
+        s_sd_next_mount_ts = 0;
+        s_sd_next_mount_tick_sec = 0;
+        s_sd_status.mount_backoff_active = false;
+        s_sd_status.next_mount_attempt_timestamp = 0;
+    }
+    ESP_LOGI(TAG, "Ejecting / unmounting SD card...");
+    const esp_err_t err = bsp_sdcard_deinit_default();
+    const bool phys_present = bsp_sdcard_is_inserted();
+    bsp_spi_unlock();
+
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_sd_phys_present = phys_present;
+        s_sd_phys_present_valid = true;
+        s_sd_ejected_saw_removal = !phys_present;
+        s_sd_status.last_error.clear();
+        s_sd_status.last_error_timestamp = 0;
+        sync_card_status_locked();
+    }
+    ESP_LOGI(TAG, "SD card ejected cleanly (%s); safe to remove", esp_err_to_name(err));
+    return true;
+#endif
+}
+
+bool mount_sd()
+{
+#ifdef CONFIG_SCREENLESS
+    return false;
+#else
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_sd_formatting) {
+            return false;
+        }
+        s_sd_ejected = false;
+        s_sd_ejected_saw_removal = false;
+        s_sd_probe_requested = true;
+        s_sd_hydrated = false;
+        s_sd_next_mount_ts = 0;
+        s_sd_next_mount_tick_sec = 0;
+        s_sd_mount_backoff_sec = SD_MOUNT_BACKOFF_INITIAL_SEC;
+        s_sd_status.ejected = false;
+        s_sd_status.mount_backoff_active = false;
+        s_sd_status.next_mount_attempt_timestamp = 0;
+    }
+    char err_buf[160] = {};
+    bsp_spi_lock();
+    const bool mounted = ensure_sd_mounted(err_buf, sizeof(err_buf));
+    const bool phys_present = bsp_sdcard_is_inserted();
+    bsp_spi_unlock();
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_sd_phys_present = phys_present;
+        s_sd_phys_present_valid = true;
+        sync_card_status_locked();
+    }
+    return mounted;
+#endif
+}
+
 void request_sd_probe()
 {
 #ifdef CONFIG_SCREENLESS
@@ -1707,7 +2204,11 @@ void request_sd_probe()
 #else
     std::lock_guard<std::mutex> lock(s_mutex);
     s_sd_probe_requested = true;
+    s_sd_hydrated = false;
+    s_sd_ejected = false;
+    s_sd_ejected_saw_removal = false;
     s_sd_next_mount_ts = 0;
+    s_sd_next_mount_tick_sec = 0;
     s_sd_mount_backoff_sec = SD_MOUNT_BACKOFF_INITIAL_SEC;
     s_sd_status.mount_backoff_active = false;
     s_sd_status.next_mount_attempt_timestamp = 0;

@@ -54,6 +54,7 @@ struct WeatherAggregate {
     uint16_t battery_min_mv = 0;
     int16_t rssi_avg = 0;
     uint8_t station_fw_version = 0;
+    uint8_t uv_max = 0;
     int8_t timezone_offset_hours = 0;
     bool packet_counter_available = false;
     bool battery_mv_available = false;
@@ -61,6 +62,7 @@ struct WeatherAggregate {
     bool battery_low = false;
     bool rssi_available = false;
     bool station_fw_available = false;
+    bool uv_available = false;
     bool source_is_paired = false;
     char packer_name[7] = {};
     bool valid = false;
@@ -78,6 +80,14 @@ struct SdLoggerStatus {
     time_t last_error_timestamp = 0;
     bool mount_backoff_active = false;
     time_t next_mount_attempt_timestamp = 0;
+    bool card_present = false;
+    bool card_unusable = false;
+    bool ejected = false;
+    bool formatting = false;
+    uint8_t format_progress = 0;
+    double card_capacity_gb = 0.0;
+    std::string card_fs_type;
+    std::string card_status_reason;
     std::string last_error;
 };
 
@@ -93,7 +103,10 @@ namespace WeatherLogger {
     
     // SD Card Management Helpers
     bool is_sd_mounted();
+    bool eject_sd();
+    bool mount_sd();
     bool format_sd();
+    bool start_format_sd_async();
     std::vector<std::pair<std::string, size_t>> list_sd_files();
     bool delete_sd_file(const std::string& filename);
     SdLoggerStatus get_sd_status();

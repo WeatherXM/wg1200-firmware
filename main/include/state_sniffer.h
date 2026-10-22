@@ -9,6 +9,7 @@ namespace StateSniffer
 	void on_enter();
 	void leave();
 	bool get_latest_weather_pack(WsFields::FieldPack* field_pack);
+	void publish_ws_content_update();
 }
 
 #endif

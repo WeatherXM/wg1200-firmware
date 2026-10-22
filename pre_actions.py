@@ -114,6 +114,38 @@ if not os.path.exists(ws1001_key_h) and os.path.exists(ws1001_key_tpl):
     shutil.copyfile(ws1001_key_tpl, ws1001_key_h)
     print("--- [Open Keys] Initialized ws_1001_keys.h from template ---")
 
+def ensure_espidf_vfs_select_patch():
+    try:
+        platform = env.PioPlatform()
+        espidf_dir = platform.get_package_dir("framework-espidf")
+        if not espidf_dir:
+            return
+        vfs_calls_path = os.path.join(espidf_dir, "components", "vfs", "vfs_calls.c")
+        if not os.path.exists(vfs_calls_path):
+            return
+        with open(vfs_calls_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        updated = content
+        old_Loop = (
+            "    for (size_t i = 0; i < s_vfs_count; ++i) {\n"
+            "        const vfs_entry_t *vfs = get_vfs_for_index(i);\n"
+            "        if (vfs->select_p != NULL) {"
+        )
+        new_loop = (
+            "    for (size_t i = 0; i < s_vfs_count; ++i) {\n"
+            "        const vfs_entry_t *vfs = get_vfs_for_index(i);\n"
+            "        if (vfs != NULL && vfs->select_p != NULL) {"
+        )
+        if old_Loop in updated:
+            updated = updated.replace(old_Loop, new_loop)
+        if updated != content:
+            write_file_if_changed(vfs_calls_path, updated)
+            print("--- Applied NULL-guard patch to ESP-IDF components/vfs/vfs_calls.c ---")
+    except Exception as e:
+        print(f"--- Warning: Could not check/apply vfs_calls.c patch: {e} ---")
+
+ensure_espidf_vfs_select_patch()
+
 def generate_compressed_dashboard():
     import gzip
     web_server_path = "main/ws/web_server.cpp"

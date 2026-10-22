@@ -1207,7 +1207,7 @@ RetResult restart(RestartReason reason)
 
 	ESP_LOGW(TAG, "Stopping Wifi");
 	Wifi::disconnect();
-	Tb::wait_disconnected(2000);
+	Wifi::wait_disconnected(2000);
 
 	Utils::wait_ms(2000);
 

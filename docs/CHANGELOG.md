@@ -3,6 +3,20 @@
 Documentation-level changelog for the pairing-mode rework. Release-level entries
 live in the repository root [CHANGELOG.md](../CHANGELOG.md).
 
+## [0.8.37] - 2026-10-22
+
+### Major Features & Improvements (v0.8.28 – v0.8.37)
+
+| Area | What actually made it into v0.8.37 |
+|---|---|
+| **Historical Weather Trends Overhaul** | Upgraded the 24-hour Historical Weather Trends charts and the SD Card CSV Viewer (`/sd/view`) with glassmorphic cards, color-coded summary badges (`Min / Avg / Max`, `Peak Gust`, `Prevailing Wind`, `3h Pressure Trend`, `Total Rain & Wet Time`), **Feels Like** & **Dew Point** series, dual-axis **Precipitation Rate & Cumulative** charts, single-line tabular legends, and `uPlot.sync` linked crosshairs and drag-to-zoom. |
+| **Hourly Prevailing Wind Ribbon** | Added a canvas wind direction ribbon across the top of the Wind Trends chart (and SD CSV Viewer) using speed-weighted circular vector averaging (`atan2`) with directional flow arrows and 16-point cardinal labels (`N`, `NNE`, `SW`, etc.). |
+| **Bidirectional LCD ↔ Web UI Units Sync** | Added **Display Units (Web & LCD Sync)** controls (`POST /set_units`, `GET/POST /api/v1/units`). Changing temperature, wind speed, precipitation, or pressure units on either the LCD touchscreen or the Web UI immediately updates and rescales all live LCD sparklines, dashboard cards, historical charts, and the SD CSV viewer. |
+| **Zero-Wear `RTC_NOINIT_ATTR` Retention & Flash Wear Protection** | Moved primary persistence of daily rainfall baselines and daily min/max weather extremes into CRC32-protected `RTC_NOINIT_ATTR` SRAM (`_rtc_daily_cache`), backed by 24h SD CSV boot hydration and throttled 6-hour / midnight NVS checkpoints. Added delta-only `Settings::commit_safe()` NVS writes, `RTC_NOINIT_ATTR` LCD tab retention, and deduplicated `BootGuard` / station ownership / `dev_name` NVS writes, cutting NVS flash wear by >98%. |
+| **Safe microSD Eject / Mount & Auto-Remount** | Added `POST /sd/eject` and `POST /sd/mount` Web UI controls and an LCD **"SD Card Ready to Eject"** alert popup with a **"Mount SD"** button and 60s reminder. Polls `EXPANDER_IO_SD_DET` on the TCA9535 IO expander so physically removing and re-inserting a card automatically remounts `/sdcard` and flushes queued RAM history. |
+| **SD Card SPI Hardening & Pre-Inspection** | Added raw SPI Sector 0 / MBR / FAT VBR pre-inspection (`bsp_sdcard_inspect_card()`) to detect unformatted or unsupported cards without triggering `esp_vfs_select` panics. Hardened SPI bus isolation, continuous DMA `0xFF` clocking, multi-stage `ACMD41` recovery, command-level SPI telemetry in `/sd/diagnose`, and capacity-based dynamic formatting ETA (`~4.2s/GB`). |
+| **OTA Mutual Exclusion, Wi-Fi & DRAM Hardening** | Added a shared FreeRTOS mutex (`Submit::try_lock_ota()`) coordinating Cloud and Web UI OTA updates, fed `SoftWatchdog` across flash erases and SHA-256 checks, prevented identical-image OTA slot switches, moved `dns_resolve_task` and `sd_writer_task` stacks to PSRAM (`EXT_RAM_BSS_ATTR`) to free internal DRAM, increased Wi-Fi manager queue depth to 16, and optimized RF scan dwell times (~48m down to ~11m). |
+
 ## [0.8.23] - 2026-09-20
 
 ### Major Features & Improvements (Screen 3 Daily Min/Max, WS1300 Decoder & UI Overhaul)

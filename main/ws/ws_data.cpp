@@ -25,6 +25,11 @@ using std::isfinite;
 #include "ws/include/ws_fields.h"
 #include "settings.h"
 #include "weather_logger.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "esp_attr.h"
+#include "esp_memory_utils.h"
+#include "esp_rom_crc.h"
 
 namespace WsData
 {
@@ -79,17 +84,234 @@ static float _daily_baseline_cml = NAN;
 static float _daily_accum_rollover = 0.0f;
 static int32_t _daily_current_day_idx = -1;
 static float _daily_precip_cached = 0.0f;
+static time_t _daily_baseline_ts = 0;
 
 static DailyExtremes _daily_extremes;
 static int32_t _daily_extremes_day_idx = -1;
 
+static bool _nvs_daily_loaded = false;
+static uint32_t _last_nvs_save_tick = 0;
+
+static constexpr uint32_t DAILY_STATE_MAGIC = 0x57584432U; // "WXD2"
+static constexpr const char *NVS_DAILY_KEY = "wx_daily";
+// NVS cold-power-loss checkpoint interval (6 hours). Primary retention across
+// warm reboots, OTA updates, and USB flashes uses zero-wear RTC_NOINIT_ATTR SRAM.
+static constexpr uint32_t NVS_DAILY_CHECKPOINT_INTERVAL_SEC = 6 * 3600;
+
+struct PersistedDailyState
+{
+	uint32_t magic = DAILY_STATE_MAGIC;
+	uint32_t ws_id = 0;
+	int32_t precip_day_idx = -1;
+	float baseline_cml = NAN;
+	float accum_rollover = 0.0f;
+	float precip_cached = 0.0f;
+	int64_t baseline_ts = 0;
+	int32_t extremes_day_idx = -1;
+	DailyExtremes extremes;
+};
+
+// Pure POD wrapper (no default member initializers) so startup code never
+// zeroes or overwrites RTC_NOINIT_ATTR memory across warm resets / OTA / flashing.
+struct RtcDailyStateCache
+{
+	uint8_t state_bytes[sizeof(PersistedDailyState)];
+	uint32_t checksum;
+};
+
+static RTC_NOINIT_ATTR RtcDailyStateCache _rtc_daily_cache;
+static PersistedDailyState _last_nvs_state;
+static bool _last_nvs_state_valid = false;
+static bool _nvs_force_checkpoint_pending = false;
+
 static int32_t get_local_day_index()
 {
 	time_t now = time(NULL);
-	if(now <= 0) return -1;
+	if(now <= 86400) return -1;
 	int32_t tz_offset_sec = Settings::get_tz_offset() * 3600;
 	time_t local_now = now + tz_offset_sec;
 	return (int32_t)(local_now / 86400);
+}
+
+static time_t get_local_day_utc_midnight()
+{
+	time_t now = time(NULL);
+	if(now <= 86400) return 0;
+	int32_t tz_offset_sec = Settings::get_tz_offset() * 3600;
+	time_t local_now = now + tz_offset_sec;
+	time_t local_midnight = local_now - (local_now % 86400);
+	return local_midnight - tz_offset_sec;
+}
+
+static void build_persisted_daily_state(PersistedDailyState *state)
+{
+	memset(state, 0, sizeof(*state));
+	state->magic = DAILY_STATE_MAGIC;
+	state->ws_id = Settings::get_ws_id();
+	state->precip_day_idx = _daily_current_day_idx;
+	state->baseline_cml = _daily_baseline_cml;
+	state->accum_rollover = _daily_accum_rollover;
+	state->precip_cached = _daily_precip_cached;
+	state->baseline_ts = (int64_t)_daily_baseline_ts;
+	state->extremes_day_idx = _daily_extremes_day_idx;
+	state->extremes = _daily_extremes;
+}
+
+static void save_daily_state_to_rtc(const PersistedDailyState &state)
+{
+	memcpy(_rtc_daily_cache.state_bytes, &state, sizeof(state));
+	_rtc_daily_cache.checksum = esp_rom_crc32_le(
+		UINT32_MAX, _rtc_daily_cache.state_bytes, sizeof(_rtc_daily_cache.state_bytes));
+}
+
+static bool load_daily_state_from_rtc(PersistedDailyState *out_state)
+{
+	uint32_t expected_crc = esp_rom_crc32_le(
+		UINT32_MAX, _rtc_daily_cache.state_bytes, sizeof(_rtc_daily_cache.state_bytes));
+	if(expected_crc != _rtc_daily_cache.checksum)
+	{
+		return false;
+	}
+	memcpy(out_state, _rtc_daily_cache.state_bytes, sizeof(*out_state));
+	return out_state->magic == DAILY_STATE_MAGIC;
+}
+
+static void save_daily_state_to_nvs(bool force)
+{
+	PersistedDailyState state;
+	build_persisted_daily_state(&state);
+
+	// Always retain immediately in RTC_NOINIT_ATTR SRAM (zero flash wear)
+	save_daily_state_to_rtc(state);
+
+	if(force)
+	{
+		_nvs_force_checkpoint_pending = true;
+	}
+
+	// Never invoke NVS write/commit from a task whose stack is in external PSRAM
+	// (e.g. ui_update_task or sd_writer_task), as SPI flash cache-disable checks
+	// abort with esp_task_stack_is_sane_cache_disabled. Any pending forced
+	// checkpoint will be flushed on the next call from an internal-RAM task.
+	if(!esp_ptr_internal(&state))
+	{
+		return;
+	}
+
+	const bool effective_force = force || _nvs_force_checkpoint_pending;
+	uint32_t now_tick = Utils::get_tick_sec();
+	if(!effective_force && _last_nvs_save_tick != 0 &&
+	   (now_tick - _last_nvs_save_tick) < NVS_DAILY_CHECKPOINT_INTERVAL_SEC)
+	{
+		return;
+	}
+
+	// Skip NVS write if state bytes are identical to the last NVS-committed checkpoint
+	if(_last_nvs_state_valid && memcmp(&state, &_last_nvs_state, sizeof(state)) == 0)
+	{
+		_last_nvs_save_tick = (now_tick != 0) ? now_tick : 1;
+		_nvs_force_checkpoint_pending = false;
+		return;
+	}
+
+	nvs_handle_t handle;
+	if(nvs_open("settings", NVS_READWRITE, &handle) != ESP_OK)
+	{
+		return;
+	}
+
+	if(nvs_set_blob(handle, NVS_DAILY_KEY, &state, sizeof(state)) == ESP_OK)
+	{
+		if(nvs_commit(handle) == ESP_OK)
+		{
+			_last_nvs_state = state;
+			_last_nvs_state_valid = true;
+			_last_nvs_save_tick = (now_tick != 0) ? now_tick : 1;
+			_nvs_force_checkpoint_pending = false;
+		}
+	}
+	nvs_close(handle);
+}
+
+static void ensure_daily_state_loaded()
+{
+	if(_nvs_daily_loaded) return;
+	_nvs_daily_loaded = true;
+
+	PersistedDailyState nvs_state;
+	memset(&nvs_state, 0, sizeof(nvs_state));
+	bool has_nvs = false;
+
+	nvs_handle_t handle;
+	if(nvs_open("settings", NVS_READONLY, &handle) == ESP_OK)
+	{
+		size_t len = sizeof(nvs_state);
+		esp_err_t err = nvs_get_blob(handle, NVS_DAILY_KEY, &nvs_state, &len);
+		nvs_close(handle);
+		if(err == ESP_OK && len == sizeof(nvs_state) && nvs_state.magic == DAILY_STATE_MAGIC)
+		{
+			has_nvs = true;
+			_last_nvs_state = nvs_state;
+			_last_nvs_state_valid = true;
+			_last_nvs_save_tick = Utils::get_tick_sec();
+			if(_last_nvs_save_tick == 0) _last_nvs_save_tick = 1;
+		}
+	}
+
+	PersistedDailyState rtc_state;
+	memset(&rtc_state, 0, sizeof(rtc_state));
+	bool has_rtc = load_daily_state_from_rtc(&rtc_state);
+
+	if(!has_rtc && !has_nvs)
+	{
+		_last_nvs_save_tick = Utils::get_tick_sec();
+		if(_last_nvs_save_tick == 0) _last_nvs_save_tick = 1;
+		return;
+	}
+
+	// Prefer RTC_NOINIT_ATTR state across warm reboots / OTA / USB flashes;
+	// fall back to NVS checkpoint after a cold power cycle.
+	const PersistedDailyState &state = has_rtc ? rtc_state : nvs_state;
+	const char *source_label = has_rtc ? "RTC RAM" : "NVS";
+
+	uint32_t paired_id = Settings::get_ws_id();
+	if(paired_id != 0 && state.ws_id != 0 && state.ws_id != paired_id)
+	{
+		ESP_LOGI(TAG, "Ignoring persisted daily state (%s) for old station %lu (current %lu)",
+			source_label, (unsigned long)state.ws_id, (unsigned long)paired_id);
+		return;
+	}
+
+	int32_t cur_day = get_local_day_index();
+	if(state.precip_day_idx >= 0 && (cur_day < 0 || state.precip_day_idx == cur_day))
+	{
+		_daily_current_day_idx = state.precip_day_idx;
+		_daily_baseline_cml = state.baseline_cml;
+		_daily_accum_rollover = isfinite(state.accum_rollover) ? state.accum_rollover : 0.0f;
+		_daily_precip_cached = isfinite(state.precip_cached) ? state.precip_cached : 0.0f;
+		_daily_baseline_ts = (time_t)state.baseline_ts;
+		ESP_LOGI(TAG, "Restored daily rain state from %s for day %ld: baseline=%.2f mm, cached=%.2f mm",
+			source_label, (long)_daily_current_day_idx, _daily_baseline_cml, _daily_precip_cached);
+	}
+
+	if(state.extremes_day_idx >= 0 && (cur_day < 0 || state.extremes_day_idx == cur_day))
+	{
+		_daily_extremes_day_idx = state.extremes_day_idx;
+		_daily_extremes = state.extremes;
+		ESP_LOGI(TAG, "Restored daily extremes from %s for day %ld", source_label, (long)_daily_extremes_day_idx);
+	}
+
+	// Ensure RTC cache is seeded if we restored from NVS on a cold boot
+	if(!has_rtc && has_nvs)
+	{
+		save_daily_state_to_rtc(nvs_state);
+		if(_last_nvs_save_tick == 0) _last_nvs_save_tick = 1;
+	}
+	else if(has_rtc && _last_nvs_save_tick == 0)
+	{
+		_last_nvs_save_tick = Utils::get_tick_sec();
+		if(_last_nvs_save_tick == 0) _last_nvs_save_tick = 1;
+	}
 }
 
 static void reset_precip_rate_state()
@@ -119,6 +341,7 @@ WsCommon::RetRes init()
 
 	clear_recv();
 	clear_aggregates();
+	ensure_daily_state_loaded();
 
 	return WsCommon::RetRes::OK;
 }
@@ -466,24 +689,49 @@ void reset_daily_precip()
 	_daily_accum_rollover = 0.0f;
 	_daily_current_day_idx = -1;
 	_daily_precip_cached = 0.0f;
+	save_daily_state_to_nvs(true);
 }
 
 void update_daily_precip(float cml_val)
 {
+	ensure_daily_state_loaded();
 	if(!isfinite(cml_val)) return;
 
 	int32_t day_idx = get_local_day_index();
-	if(day_idx < 0) return;
-
-	if(_daily_current_day_idx != day_idx)
+	if(day_idx >= 0)
 	{
-		_daily_current_day_idx = day_idx;
-		_daily_baseline_cml = cml_val;
-		_daily_accum_rollover = 0.0f;
-		_daily_precip_cached = 0.0f;
-		ESP_LOGI(TAG, "Daily rain counter initialized for local day index %ld (baseline: %.2f mm)",
-			(long)day_idx, cml_val);
-		return;
+		if(_daily_current_day_idx == -1)
+		{
+			// Transitioning from pre-NTP to valid local day: preserve any pre-NTP baseline captured since boot
+			_daily_current_day_idx = day_idx;
+			if(isnan(_daily_baseline_cml))
+			{
+				_daily_baseline_cml = cml_val;
+				_daily_accum_rollover = 0.0f;
+				_daily_precip_cached = 0.0f;
+				ESP_LOGI(TAG, "Daily rain counter initialized for local day index %ld (baseline: %.2f mm)",
+					(long)day_idx, cml_val);
+				save_daily_state_to_nvs(true);
+				return;
+			}
+			save_daily_state_to_nvs(true);
+		}
+		else if(_daily_current_day_idx != day_idx)
+		{
+			_daily_current_day_idx = day_idx;
+			_daily_baseline_cml = cml_val;
+			_daily_accum_rollover = 0.0f;
+			_daily_precip_cached = 0.0f;
+			if(_daily_extremes_day_idx != -1 && _daily_extremes_day_idx != day_idx)
+			{
+				_daily_extremes = DailyExtremes();
+				_daily_extremes_day_idx = day_idx;
+			}
+			ESP_LOGI(TAG, "Daily rain counter rolled over to local day index %ld (baseline: %.2f mm)",
+				(long)day_idx, cml_val);
+			save_daily_state_to_nvs(true);
+			return;
+		}
 	}
 
 	if(isnan(_daily_baseline_cml))
@@ -491,9 +739,11 @@ void update_daily_precip(float cml_val)
 		_daily_baseline_cml = cml_val;
 		_daily_accum_rollover = 0.0f;
 		_daily_precip_cached = 0.0f;
+		if(day_idx >= 0) save_daily_state_to_nvs(true);
 		return;
 	}
 
+	float prev_cached = _daily_precip_cached;
 	if(cml_val >= _daily_baseline_cml)
 	{
 		_daily_precip_cached = (cml_val - _daily_baseline_cml) + _daily_accum_rollover;
@@ -501,31 +751,41 @@ void update_daily_precip(float cml_val)
 	else
 	{
 		// Station reset or counter wrap
-		_daily_accum_rollover += cml_val;
+		_daily_accum_rollover = _daily_precip_cached + cml_val;
 		_daily_baseline_cml = cml_val;
 		_daily_precip_cached = _daily_accum_rollover;
+		if(day_idx >= 0) save_daily_state_to_nvs(true);
+	}
+
+	if(day_idx >= 0 && fabsf(_daily_precip_cached - prev_cached) >= 0.01f)
+	{
+		save_daily_state_to_nvs(false);
 	}
 }
 
 float get_daily_precip()
 {
+	ensure_daily_state_loaded();
+
 	int32_t day_idx = get_local_day_index();
 	if(day_idx >= 0 && _daily_current_day_idx != -1 && _daily_current_day_idx != day_idx)
 	{
 		_daily_current_day_idx = day_idx;
+		_daily_baseline_cml = NAN;
 		_daily_accum_rollover = 0.0f;
 		_daily_precip_cached = 0.0f;
+		if(_daily_extremes_day_idx != -1 && _daily_extremes_day_idx != day_idx)
+		{
+			_daily_extremes = DailyExtremes();
+			_daily_extremes_day_idx = day_idx;
+		}
+		save_daily_state_to_nvs(false);
 	}
 
-	// Fallback to WeatherLogger aggregates if daily cache is zero after reboot
-	if(_daily_precip_cached == 0.0f && day_idx >= 0)
+	// Reconcile with WeatherLogger aggregates (including SD-hydrated history after reboot)
+	if(day_idx >= 0)
 	{
-		time_t now = time(NULL);
-		int32_t tz_offset_sec = Settings::get_tz_offset() * 3600;
-		time_t local_now = now + tz_offset_sec;
-		time_t local_midnight = local_now - (local_now % 86400);
-		time_t utc_midnight = local_midnight - tz_offset_sec;
-
+		time_t utc_midnight = get_local_day_utc_midnight();
 		auto aggs = WeatherLogger::get_aggregates();
 		float sum = 0.0f;
 		bool found = false;
@@ -537,7 +797,15 @@ float get_daily_precip()
 				found = true;
 			}
 		}
-		if(found)
+		if(found && sum > _daily_precip_cached + 0.05f)
+		{
+			float missing = sum - _daily_precip_cached;
+			_daily_accum_rollover += missing;
+			_daily_precip_cached = sum;
+			if(_daily_current_day_idx == -1) _daily_current_day_idx = day_idx;
+			save_daily_state_to_nvs(false);
+		}
+		if(found && sum > _daily_precip_cached)
 		{
 			return sum;
 		}
@@ -550,97 +818,118 @@ void reset_daily_extremes()
 {
 	_daily_extremes = DailyExtremes();
 	_daily_extremes_day_idx = -1;
+	save_daily_state_to_nvs(true);
 }
 
 void update_daily_extremes(const WsFields::FieldPack* field_pack)
 {
+	ensure_daily_state_loaded();
 	if(field_pack == NULL) return;
 
+	bool changed = false;
 	int32_t day_idx = get_local_day_index();
 	if(day_idx >= 0)
 	{
-		if(_daily_extremes_day_idx != day_idx)
+		if(_daily_extremes_day_idx == -1)
+		{
+			_daily_extremes_day_idx = day_idx;
+			changed = true;
+		}
+		else if(_daily_extremes_day_idx != day_idx)
 		{
 			_daily_extremes = DailyExtremes();
 			_daily_extremes_day_idx = day_idx;
+			changed = true;
 		}
 	}
 
 	float temp = 0.0f;
 	if(WsFields::get_field_val_from_pack(const_cast<WsFields::FieldPack*>(field_pack), WsFields::FieldType::WEATHER_TEMP, NULL, &temp) == WsCommon::RetRes::OK && isfinite(temp))
 	{
-		if(isnan(_daily_extremes.temp_min) || temp < _daily_extremes.temp_min) _daily_extremes.temp_min = temp;
-		if(isnan(_daily_extremes.temp_max) || temp > _daily_extremes.temp_max) _daily_extremes.temp_max = temp;
+		if(isnan(_daily_extremes.temp_min) || temp < _daily_extremes.temp_min) { _daily_extremes.temp_min = temp; changed = true; }
+		if(isnan(_daily_extremes.temp_max) || temp > _daily_extremes.temp_max) { _daily_extremes.temp_max = temp; changed = true; }
 		_daily_extremes.has_data = true;
 	}
 
 	float press = 0.0f;
 	if(WsFields::get_field_val_from_pack(const_cast<WsFields::FieldPack*>(field_pack), WsFields::FieldType::WEATHER_PRESSURE, NULL, &press) == WsCommon::RetRes::OK && isfinite(press))
 	{
-		if(isnan(_daily_extremes.pressure_min) || press < _daily_extremes.pressure_min) _daily_extremes.pressure_min = press;
-		if(isnan(_daily_extremes.pressure_max) || press > _daily_extremes.pressure_max) _daily_extremes.pressure_max = press;
+		if(isnan(_daily_extremes.pressure_min) || press < _daily_extremes.pressure_min) { _daily_extremes.pressure_min = press; changed = true; }
+		if(isnan(_daily_extremes.pressure_max) || press > _daily_extremes.pressure_max) { _daily_extremes.pressure_max = press; changed = true; }
 		_daily_extremes.has_data = true;
 	}
 
 	float hum = 0.0f;
 	if(WsFields::get_field_val_from_pack(const_cast<WsFields::FieldPack*>(field_pack), WsFields::FieldType::WEATHER_HUM, NULL, &hum) == WsCommon::RetRes::OK && isfinite(hum))
 	{
-		if(isnan(_daily_extremes.hum_min) || hum < _daily_extremes.hum_min) _daily_extremes.hum_min = hum;
-		if(isnan(_daily_extremes.hum_max) || hum > _daily_extremes.hum_max) _daily_extremes.hum_max = hum;
+		if(isnan(_daily_extremes.hum_min) || hum < _daily_extremes.hum_min) { _daily_extremes.hum_min = hum; changed = true; }
+		if(isnan(_daily_extremes.hum_max) || hum > _daily_extremes.hum_max) { _daily_extremes.hum_max = hum; changed = true; }
 		_daily_extremes.has_data = true;
 	}
 
 	float gust = 0.0f;
 	if(WsFields::get_field_val_from_pack(const_cast<WsFields::FieldPack*>(field_pack), WsFields::FieldType::WEATHER_WIND_GUST, NULL, &gust) == WsCommon::RetRes::OK && isfinite(gust))
 	{
-		if(isnan(_daily_extremes.wind_gust_max) || gust > _daily_extremes.wind_gust_max) _daily_extremes.wind_gust_max = gust;
+		if(isnan(_daily_extremes.wind_gust_max) || gust > _daily_extremes.wind_gust_max) { _daily_extremes.wind_gust_max = gust; changed = true; }
 		_daily_extremes.has_data = true;
 	}
 
 	float rate = 0.0f;
 	if(WsFields::get_field_val_from_pack(const_cast<WsFields::FieldPack*>(field_pack), WsFields::FieldType::WEATHER_PRECIP_RATE, NULL, &rate) == WsCommon::RetRes::OK && isfinite(rate))
 	{
-		if(isnan(_daily_extremes.precip_rate_max) || rate > _daily_extremes.precip_rate_max) _daily_extremes.precip_rate_max = rate;
+		if(isnan(_daily_extremes.precip_rate_max) || rate > _daily_extremes.precip_rate_max) { _daily_extremes.precip_rate_max = rate; changed = true; }
 	}
 	float live_rate = get_precip_rate();
 	if(isfinite(live_rate))
 	{
-		if(isnan(_daily_extremes.precip_rate_max) || live_rate > _daily_extremes.precip_rate_max) _daily_extremes.precip_rate_max = live_rate;
+		if(isnan(_daily_extremes.precip_rate_max) || live_rate > _daily_extremes.precip_rate_max) { _daily_extremes.precip_rate_max = live_rate; changed = true; }
 	}
 
 	uint8_t uv = 0;
 	if(WsFields::get_field_val_from_pack(const_cast<WsFields::FieldPack*>(field_pack), WsFields::FieldType::WEATHER_UV_INDEX, NULL, &uv) == WsCommon::RetRes::OK)
 	{
-		if(uv > _daily_extremes.uv_max) _daily_extremes.uv_max = uv;
+		if(uv > _daily_extremes.uv_max) { _daily_extremes.uv_max = uv; changed = true; }
 		_daily_extremes.has_data = true;
 	}
 
 	float solar = 0.0f;
 	if(WsFields::get_field_val_from_pack(const_cast<WsFields::FieldPack*>(field_pack), WsFields::FieldType::WEATHER_SOLAR_RAD, NULL, &solar) == WsCommon::RetRes::OK && isfinite(solar))
 	{
-		if(isnan(_daily_extremes.solar_rad_max) || solar > _daily_extremes.solar_rad_max) _daily_extremes.solar_rad_max = solar;
+		if(isnan(_daily_extremes.solar_rad_max) || solar > _daily_extremes.solar_rad_max) { _daily_extremes.solar_rad_max = solar; changed = true; }
 		_daily_extremes.has_data = true;
+	}
+
+	if(changed && day_idx >= 0)
+	{
+		save_daily_state_to_nvs(false);
 	}
 }
 
 DailyExtremes get_daily_extremes()
 {
+	ensure_daily_state_loaded();
+
 	int32_t day_idx = get_local_day_index();
 	if(day_idx >= 0 && _daily_extremes_day_idx != -1 && _daily_extremes_day_idx != day_idx)
 	{
 		_daily_extremes = DailyExtremes();
 		_daily_extremes_day_idx = day_idx;
+		if(_daily_current_day_idx != -1 && _daily_current_day_idx != day_idx)
+		{
+			_daily_current_day_idx = day_idx;
+			_daily_baseline_cml = NAN;
+			_daily_accum_rollover = 0.0f;
+			_daily_precip_cached = 0.0f;
+		}
+		save_daily_state_to_nvs(false);
 	}
 
-	// Fallback to WeatherLogger aggregates if no extremes recorded yet today (e.g. fresh reboot)
-	if(!_daily_extremes.has_data && day_idx >= 0)
-	{
-		time_t now = time(NULL);
-		int32_t tz_offset_sec = Settings::get_tz_offset() * 3600;
-		time_t local_now = now + tz_offset_sec;
-		time_t local_midnight = local_now - (local_now % 86400);
-		time_t utc_midnight = local_midnight - tz_offset_sec;
+	DailyExtremes res = _daily_extremes;
 
+	// Reconcile with WeatherLogger aggregates for today (handles SD card recovery after mid-day reboot)
+	if(day_idx >= 0)
+	{
+		time_t utc_midnight = get_local_day_utc_midnight();
 		auto aggs = WeatherLogger::get_aggregates();
 		for(const auto &agg : aggs)
 		{
@@ -648,41 +937,46 @@ DailyExtremes get_daily_extremes()
 			{
 				if(!isnan(agg.temp_avg))
 				{
-					if(isnan(_daily_extremes.temp_min) || agg.temp_avg < _daily_extremes.temp_min) _daily_extremes.temp_min = agg.temp_avg;
-					if(isnan(_daily_extremes.temp_max) || agg.temp_avg > _daily_extremes.temp_max) _daily_extremes.temp_max = agg.temp_avg;
-					_daily_extremes.has_data = true;
+					if(isnan(res.temp_min) || agg.temp_avg < res.temp_min) res.temp_min = agg.temp_avg;
+					if(isnan(res.temp_max) || agg.temp_avg > res.temp_max) res.temp_max = agg.temp_avg;
+					res.has_data = true;
 				}
 				if(!isnan(agg.pressure_avg))
 				{
-					if(isnan(_daily_extremes.pressure_min) || agg.pressure_avg < _daily_extremes.pressure_min) _daily_extremes.pressure_min = agg.pressure_avg;
-					if(isnan(_daily_extremes.pressure_max) || agg.pressure_avg > _daily_extremes.pressure_max) _daily_extremes.pressure_max = agg.pressure_avg;
-					_daily_extremes.has_data = true;
+					if(isnan(res.pressure_min) || agg.pressure_avg < res.pressure_min) res.pressure_min = agg.pressure_avg;
+					if(isnan(res.pressure_max) || agg.pressure_avg > res.pressure_max) res.pressure_max = agg.pressure_avg;
+					res.has_data = true;
 				}
 				if(!isnan(agg.hum_avg))
 				{
-					if(isnan(_daily_extremes.hum_min) || agg.hum_avg < _daily_extremes.hum_min) _daily_extremes.hum_min = agg.hum_avg;
-					if(isnan(_daily_extremes.hum_max) || agg.hum_avg > _daily_extremes.hum_max) _daily_extremes.hum_max = agg.hum_avg;
-					_daily_extremes.has_data = true;
+					if(isnan(res.hum_min) || agg.hum_avg < res.hum_min) res.hum_min = agg.hum_avg;
+					if(isnan(res.hum_max) || agg.hum_avg > res.hum_max) res.hum_max = agg.hum_avg;
+					res.has_data = true;
 				}
 				if(!isnan(agg.wind_gust_max))
 				{
-					if(isnan(_daily_extremes.wind_gust_max) || agg.wind_gust_max > _daily_extremes.wind_gust_max) _daily_extremes.wind_gust_max = agg.wind_gust_max;
-					_daily_extremes.has_data = true;
+					if(isnan(res.wind_gust_max) || agg.wind_gust_max > res.wind_gust_max) res.wind_gust_max = agg.wind_gust_max;
+					res.has_data = true;
 				}
 				if(!isnan(agg.precip_avg))
 				{
-					if(isnan(_daily_extremes.precip_rate_max) || agg.precip_avg > _daily_extremes.precip_rate_max) _daily_extremes.precip_rate_max = agg.precip_avg;
+					if(isnan(res.precip_rate_max) || agg.precip_avg > res.precip_rate_max) res.precip_rate_max = agg.precip_avg;
+				}
+				if(agg.uv_available)
+				{
+					if(agg.uv_max > res.uv_max) res.uv_max = agg.uv_max;
+					res.has_data = true;
 				}
 				if(!isnan(agg.solar_rad_avg))
 				{
-					if(isnan(_daily_extremes.solar_rad_max) || agg.solar_rad_avg > _daily_extremes.solar_rad_max) _daily_extremes.solar_rad_max = agg.solar_rad_avg;
-					_daily_extremes.has_data = true;
+					if(isnan(res.solar_rad_max) || agg.solar_rad_avg > res.solar_rad_max) res.solar_rad_max = agg.solar_rad_avg;
+					res.has_data = true;
 				}
 			}
 		}
 	}
 
-	return _daily_extremes;
+	return res;
 }
 
 /******************************************************************************

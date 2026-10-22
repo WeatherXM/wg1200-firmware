@@ -20,7 +20,7 @@ dependencies:
       type: service
     version: 1.1.0
   espressif/mqtt:
-    component_hash: ffdad5659706b4dc14bc63f8eb73ef765efa015bf7e9adf71c813d52a2dc9342
+    component_hash: fb18bc3b65aa8c94693a9811ffc322cca8a65d92d5ec84983d3e385080e3969c
     dependencies:
     - name: idf
       require: private
@@ -28,13 +28,13 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.0.0
+    version: 1.1.0
   idf:
     source:
       type: idf
     version: 6.0.1
   joltwallet/littlefs:
-    component_hash: fab83a8a57de01b05441557d78e9d10c755413a1836af4b2762b539add0c14b1
+    component_hash: 3af20a3d75c49db9dc2286fd50862c34055c9f578419ad1f2bf7ed3ed01391fe
     dependencies:
     - name: idf
       require: private
@@ -42,13 +42,13 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.22.2
+    version: 1.22.3
 direct_dependencies:
 - espressif/cjson
 - espressif/mdns
 - espressif/mqtt
 - idf
 - joltwallet/littlefs
-manifest_hash: d7a618d8c536bd0dcaa21070946281b7f37ef6b8ce3ce61545fbf5dd5496ff49
+manifest_hash: 918f17f0a32bc0bb00a7d64fa7fff135b1638f5b287caecf301337ef11a34435
 target: esp32s3
 version: 2.0.0

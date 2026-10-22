@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "cJSON.h"
 #include "time.h"
 #include "esp_ota_ops.h"
@@ -30,6 +31,7 @@
 #include "log.h"
 #include "global_events.h"
 #include "soft_watchdog.h"
+#include "boot_guard.h"
 #include "esp_heap_caps.h"
 #include <string.h>
 #include <strings.h>
@@ -79,6 +81,10 @@ StaticTask_t _task_buff;
 
 /** Soft Watchdog handle */
 SoftWatchdog::Handle _swd_handle;
+
+/** Shared OTA mutex to prevent concurrent Cloud OTA and Web OTA writes */
+static StaticSemaphore_t _ota_mutex_buff;
+static SemaphoreHandle_t _ota_mutex = NULL;
 
 /** WXM cert to use with HTTPS */
 extern const uint8_t _wxm_pem_start[] asm("_binary_wxm_pem_start");
@@ -202,9 +208,31 @@ RetResult init()
 		ESP_LOGE(TAG, "Could not create submit timer: %x", esp_ret);
 	}
 
-	 SoftWatchdog::init(&_swd_handle, SUBMIT_TASK_SWD_TIMEOUT_MS);
+	if(_ota_mutex == NULL)
+	{
+		_ota_mutex = xSemaphoreCreateMutexStatic(&_ota_mutex_buff);
+	}
+
+	SoftWatchdog::init(&_swd_handle, SUBMIT_TASK_SWD_TIMEOUT_MS);
 
 	return RET_OK;
+}
+
+bool try_lock_ota()
+{
+	if(_ota_mutex == NULL)
+	{
+		return true;
+	}
+	return xSemaphoreTake(_ota_mutex, 0) == pdTRUE;
+}
+
+void unlock_ota()
+{
+	if(_ota_mutex != NULL)
+	{
+		xSemaphoreGive(_ota_mutex);
+	}
 }
 
 /******************************************************************************
@@ -784,9 +812,14 @@ bool sha256_of_partition(const esp_partition_t *partition, int length, uint8_t d
 	bool ok = mbedtls_sha256_starts(&ctx, 0) == 0;
 
 	int offset = 0;
+	int chunk_num = 0;
 	while(ok && offset < length)
 	{
 		SoftWatchdog::feed(&_swd_handle);
+		if((++chunk_num & 0x0F) == 0)
+		{
+			vTaskDelay(1);
+		}
 
 		int read_len = length - offset;
 		if(read_len > OTA_VERIFY_READ_BUF_SIZE)
@@ -848,6 +881,7 @@ static void record_ota_failure(const char *reason)
 				 (unsigned long)MAX_CONSECUTIVE_OTA_FAILURES);
 		s_consecutive_ota_failures = 0;
 		ota_cleanup();
+		SoftWatchdog::stop(&_swd_handle);
 		vTaskDelay(pdMS_TO_TICKS(1000));
 		Utils::safe_restart(Utils::RestartReason::OTA_FAILED);
 	}
@@ -865,8 +899,6 @@ RetResult handle_ota()
 	{
 		return RET_OK;
 	}
-
-	last_ota_check_ms = Utils::get_tick_ms();
 
 	RetResult ret = RET_ERROR;
 	esp_err_t esp_ret = 0;
@@ -900,6 +932,9 @@ RetResult handle_ota()
 		ESP_LOGE(TAG, "Could not parse OTA attr json: %s", error.c_str());
 		return RET_ERROR;
 	}
+
+	// Mark check timestamp only after a valid attribute response is received
+	last_ota_check_ms = Utils::get_tick_ms();
 
 	// Check if all OTA attributes present
 	if(!(shared_attr.containsKey(TB_KEY_OTA_FW_VERSION) && shared_attr.containsKey(TB_KEY_OTA_FW_SIZE) &&
@@ -981,6 +1016,17 @@ RetResult handle_ota()
 	{
 		ESP_LOGI(TAG, "New OTA version online: %s (current: %s). Proceeding with update.", version_str, APP_VERSION);
 	}
+
+	// Prevent concurrent Cloud OTA and Web OTA writes to the same partition
+	if(!try_lock_ota())
+	{
+		ESP_LOGW(TAG, "OTA already in progress (Web OTA active), deferring cloud OTA.");
+		last_ota_check_ms = 0;
+		return RET_ERROR;
+	}
+	struct OtaLockGuard {
+		~OtaLockGuard() { unlock_ota(); }
+	} ota_lock_guard;
 
 	//
 	// Download and write FW
@@ -1194,6 +1240,7 @@ RetResult handle_ota()
 	uint8_t flash_sha256[32] = {};
 	char flash_sha256_hex[65] = "";
 
+	SoftWatchdog::feed(&_swd_handle);
 	if(!sha256_of_partition(ota_partition, fw_size_bytes, flash_sha256))
 	{
 		// Could not verify. Fail closed: with no bootloader rollback configured,
@@ -1207,6 +1254,7 @@ RetResult handle_ota()
 		record_ota_failure(write_err);
 		return RET_ERROR;
 	}
+	SoftWatchdog::feed(&_swd_handle);
 
 	sha256_to_hex(flash_sha256, flash_sha256_hex);
 
@@ -1228,7 +1276,9 @@ RetResult handle_ota()
 	publish_update_ota_state("DOWNLOADED", version_str);
 
 	// Finalize
+	SoftWatchdog::feed(&_swd_handle);
 	esp_ret  = esp_ota_end(ota_handle);
+	SoftWatchdog::feed(&_swd_handle);
 	if(esp_ret != ESP_OK)
 	{
 		snprintf(write_err, sizeof(write_err), "OTA end failed: %s", esp_err_to_name(esp_ret));
@@ -1244,9 +1294,11 @@ RetResult handle_ota()
 		snprintf(write_err, sizeof(write_err), "OTA fw is same as current.");
 		publish_ota_failed(write_err, version_str);
 		ESP_LOGE(TAG, "OTA firmware is same as current firmware.");
+		return RET_ERROR;
 	}
 
 	// Set as boot partition
+	SoftWatchdog::feed(&_swd_handle);
 	esp_ret = esp_ota_set_boot_partition(ota_partition);
 	if(esp_ret != ESP_OK)
 	{
@@ -1261,7 +1313,9 @@ RetResult handle_ota()
 		publish_update_ota_state("UPDATED", version_str);
 		s_consecutive_ota_failures = 0;
 
-		// TODO: Set reboot pending flag and restart later, after submitting data?
+		// Stop soft watchdog before graceful restart (which blocks up to 7s)
+		// so it cannot bark during shutdown and mark a false crash on first boot.
+		SoftWatchdog::stop(&_swd_handle);
 		Utils::restart(Utils::RestartReason::OTA_UPDATE);
 	}
 
@@ -1350,8 +1404,6 @@ RetResult handle_remote_settings()
 		return RET_OK;
 	}
 
-	last_rs_check_ms = Utils::get_tick_ms();
-
 	RetResult ret = RET_ERROR;
 
 	ESP_LOGI(TAG, "Handling remote settings");
@@ -1406,6 +1458,9 @@ RetResult handle_remote_settings()
 		ESP_LOGE(TAG, "Could not parse RS attr json: %s", error.c_str());
 		return RET_ERROR;
 	}
+
+	// Mark check timestamp only after a valid attribute response is received
+	last_rs_check_ms = Utils::get_tick_ms();
 
 	JsonObject shared_attr = attr_doc.containsKey(TB_KEY_SHARED_ATTRIBUTES) 
 		? attr_doc[TB_KEY_SHARED_ATTRIBUTES].as<JsonObject>() 
@@ -1804,6 +1859,7 @@ RetResult handle_remote_settings()
 					 RS_KEY_REBOOT, (unsigned long long)req_id, (unsigned long long)last_id);
 			Settings::set_last_reboot_id(req_id);
 			Settings::commit_blocking();
+			SoftWatchdog::stop(&_swd_handle);
 			vTaskDelay(pdMS_TO_TICKS(500));
 			Utils::safe_restart(Utils::RestartReason::REMOTE_REBOOT);
 		}
@@ -1942,28 +1998,39 @@ void submit_task(void *param)
 
 		// Log WiFi RSSI
 		Log::log(Log::Code::WIFI_RSSI, Wifi::get_rssi());
+		SoftWatchdog::feed(&_swd_handle);
 
 		// Handle OTA
 		handle_ota();
 		ota_cleanup();
+		SoftWatchdog::feed(&_swd_handle);
 
 		// Handle remote config
 		handle_remote_settings();
+		SoftWatchdog::feed(&_swd_handle);
 
 		// Client attributes
 		submit_client_attr();
+		SoftWatchdog::feed(&_swd_handle);
+
+		// Confirm boot healthy once connected to ThingsBoard and before shipping logs
+		BootGuard::mark_healthy();
 
 		// Submit logs
 		submit_logs();
+		SoftWatchdog::feed(&_swd_handle);
 
 		// Submit weather station data
 		submit_ws_data();
+		SoftWatchdog::feed(&_swd_handle);
 
 		// Submit forwarded remote weather station data
 		submit_remote_ws_data();
+		SoftWatchdog::feed(&_swd_handle);
 
 		// Submit GPS data
 		submit_gps_data();
+		SoftWatchdog::feed(&_swd_handle);
 	}
 	else
 	{

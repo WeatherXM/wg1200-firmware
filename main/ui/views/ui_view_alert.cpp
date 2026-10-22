@@ -81,10 +81,31 @@ View &View::create(lv_obj_t *parent)
 			{
 				return;
 			}
-			alert_obj->set_last_shown_ts(time(NULL));
+			alert_obj->set_last_shown_ts(UiCommon::get_seconds_count());
 			set_alert_state(alert_obj, false);
 		}, this)
 		.align(LV_ALIGN_TOP_RIGHT, 0, 0);
+	_button_action.create(_self_lv_obj)
+		.size(165, 40)
+		.radius(8)
+		.color_bg(lv_color_hex(0x0D47A1))
+		.color_bg_clicked(lv_color_hex(0x1565C0))
+		.border_width(1)
+		.border_color(lv_color_hex(0x64B5F6))
+		.color_title(lv_color_hex(0xFEFBFF))
+		.title((char *)"Mount SD")
+		.set_cb([](lv_event_t *event) {
+			if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
+				return;
+			}
+			UiViewAlert::View *alert_obj = (UiViewAlert::View *)lv_event_get_user_data(event);
+			set_alert_state(alert_obj, false);
+			if (alert_obj->_action_cb != nullptr) {
+				alert_obj->_action_cb();
+			}
+		}, this)
+		.align(LV_ALIGN_BOTTOM_MID, 0, -14);
+	lv_obj_add_flag(_button_action.self_lv_obj(), LV_OBJ_FLAG_HIDDEN);
 	return *this;
 }
 
@@ -156,6 +177,25 @@ View &View::msg(const char *msg)
 	_lbl_msg.text(msg);
 	_lbl_msg.text_align(LV_TEXT_ALIGN_CENTER);
 	_lbl_msg.realign();
+	return *this;
+}
+
+View &View::action_btn(const char *label, void (*cb)(void))
+{
+	if (label != nullptr && label[0] != '\0' && cb != nullptr) {
+		_action_cb = cb;
+		_button_action.title(const_cast<char *>(label));
+		lv_obj_clear_flag(_button_action.self_lv_obj(), LV_OBJ_FLAG_HIDDEN);
+		_icon.align(LV_ALIGN_TOP_MID, 0, 22);
+		_lbl_title.align(LV_ALIGN_TOP_MID, 0, 86);
+		_lbl_msg.align_to(_lbl_title.self_lv_obj(), LV_ALIGN_OUT_BOTTOM_MID, 0, 6);
+	} else {
+		_action_cb = nullptr;
+		lv_obj_add_flag(_button_action.self_lv_obj(), LV_OBJ_FLAG_HIDDEN);
+		_icon.align(LV_ALIGN_TOP_MID, 0, 35);
+		_lbl_title.align(LV_ALIGN_TOP_MID, 0, 105);
+		_lbl_msg.align_to(_lbl_title.self_lv_obj(), LV_ALIGN_OUT_BOTTOM_MID, 0, 7);
+	}
 	return *this;
 }
 

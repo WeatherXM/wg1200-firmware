@@ -523,6 +523,7 @@ TempDualTile& TempDualTile::create(lv_obj_t *parent)
 	_temp_received = false;
 	_feels_like_received = false;
 	_has_history = false;
+	_is_fahrenheit = false;
 	memset(_temp_history, 0, sizeof(_temp_history));
 	memset(_feels_like_history, 0, sizeof(_feels_like_history));
 
@@ -639,24 +640,74 @@ TempDualTile& TempDualTile::temp(char *value)
 	_lbl_temp.text(value);
 	_lbl_temp.realign();
 	
-	if (_chart != NULL && value != NULL && !_has_history)
+	if (_chart != NULL && value != NULL)
 	{
-		// adjust Y-axis scale dynamically based on selected temperature unit
-		if (strstr(value, "F") != NULL) {
-			lv_chart_set_range(_chart, LV_CHART_AXIS_PRIMARY_Y, 5000, 9000);
-			_lbl_chart_max.text("90");
-			_lbl_chart_mid.text("70");
-			_lbl_chart_min.text("50");
-		} else {
-			// default to Celsius
-			lv_chart_set_range(_chart, LV_CHART_AXIS_PRIMARY_Y, 1500, 3000);
-			_lbl_chart_max.text("30");
-			_lbl_chart_mid.text("22");
-			_lbl_chart_min.text("15");
+		bool new_is_f = (strstr(value, "F") != NULL);
+		if (_has_history && new_is_f != _is_fahrenheit)
+		{
+			float min_val = 9999.0f;
+			float max_val = -9999.0f;
+			bool valid_points = false;
+			for (int i = 0; i < 120; i++)
+			{
+				if (_temp_history[i] != (float)LV_CHART_POINT_NONE && _temp_history[i] > -100.0f && _temp_history[i] < 150.0f)
+				{
+					_temp_history[i] = new_is_f ? (_temp_history[i] * 1.8f + 32.0f) : ((_temp_history[i] - 32.0f) / 1.8f);
+					lv_chart_set_value_by_id(_chart, _ser_temp, i, to_chart_val(_temp_history[i]));
+					if (_temp_history[i] < min_val) min_val = _temp_history[i];
+					if (_temp_history[i] > max_val) max_val = _temp_history[i];
+					valid_points = true;
+				}
+				if (_feels_like_history[i] != (float)LV_CHART_POINT_NONE && _feels_like_history[i] > -100.0f && _feels_like_history[i] < 150.0f)
+				{
+					_feels_like_history[i] = new_is_f ? (_feels_like_history[i] * 1.8f + 32.0f) : ((_feels_like_history[i] - 32.0f) / 1.8f);
+					lv_chart_set_value_by_id(_chart, _ser_feels_like, i, to_chart_val(_feels_like_history[i]));
+					if (_feels_like_history[i] < min_val) min_val = _feels_like_history[i];
+					if (_feels_like_history[i] > max_val) max_val = _feels_like_history[i];
+					valid_points = true;
+				}
+			}
+			_is_fahrenheit = new_is_f;
+			if (valid_points)
+			{
+				float span = max_val - min_val;
+				float span_adjusted = (span < 1.0f) ? 1.0f : span;
+				float chart_min = max_val - span_adjusted;
+				float chart_max = max_val + span_adjusted;
+				lv_chart_set_range(_chart, LV_CHART_AXIS_PRIMARY_Y, (lv_coord_t)(chart_min * 100.0f), (lv_coord_t)(chart_max * 100.0f));
+				char lbl_buf[16];
+				snprintf(lbl_buf, sizeof(lbl_buf), "%.0f", chart_max);
+				_lbl_chart_max.text(lbl_buf);
+				_lbl_chart_max.realign();
+				snprintf(lbl_buf, sizeof(lbl_buf), "%.0f", (chart_min + chart_max) / 2.0f);
+				_lbl_chart_mid.text(lbl_buf);
+				_lbl_chart_mid.realign();
+				snprintf(lbl_buf, sizeof(lbl_buf), "%.0f", chart_min);
+				_lbl_chart_min.text(lbl_buf);
+				_lbl_chart_min.realign();
+			}
+			lv_chart_refresh(_chart);
 		}
-		_lbl_chart_max.realign();
-		_lbl_chart_mid.realign();
-		_lbl_chart_min.realign();
+		else if (!_has_history)
+		{
+			_is_fahrenheit = new_is_f;
+			// adjust Y-axis scale dynamically based on selected temperature unit
+			if (new_is_f) {
+				lv_chart_set_range(_chart, LV_CHART_AXIS_PRIMARY_Y, 5000, 9000);
+				_lbl_chart_max.text("90");
+				_lbl_chart_mid.text("70");
+				_lbl_chart_min.text("50");
+			} else {
+				// default to Celsius
+				lv_chart_set_range(_chart, LV_CHART_AXIS_PRIMARY_Y, 1500, 3000);
+				_lbl_chart_max.text("30");
+				_lbl_chart_mid.text("22");
+				_lbl_chart_min.text("15");
+			}
+			_lbl_chart_max.realign();
+			_lbl_chart_mid.realign();
+			_lbl_chart_min.realign();
+		}
 	}
 	return *this;
 }
@@ -966,11 +1017,78 @@ WindDualTile& WindDualTile::speed_and_gust(const char *speed_and_gust)
 	return *this;
 }
 
+static float wind_unit_factor_from_ms(const char *u)
+{
+	if (u == NULL) return 1.0f;
+	if (strcmp(u, "km/h") == 0) return 3.6f;
+	if (strcmp(u, "mph") == 0 || strcmp(u, "mi/h") == 0) return 2.23694f;
+	if (strcmp(u, "knots") == 0 || strcmp(u, "kts") == 0 || strcmp(u, "kn") == 0) return 1.94384f;
+	if (strcmp(u, "ft/s") == 0) return 3.28084f;
+	return 1.0f;
+}
+
 WindDualTile& WindDualTile::units(const char *units)
 {
 	_lbl_units.text(units);
 	if (_chart != NULL && units != NULL)
 	{
+		if (_has_history && strcmp(_last_units, units) != 0)
+		{
+			float old_f = wind_unit_factor_from_ms(_last_units);
+			float new_f = wind_unit_factor_from_ms(units);
+			if (old_f > 0.0f && new_f > 0.0f && strcmp(_last_units, "bft") != 0 && strcmp(units, "bft") != 0)
+			{
+				float ratio = new_f / old_f;
+				float min_val = 9999.0f;
+				float max_val = -9999.0f;
+				bool valid_points = false;
+				for (int i = 0; i < 120; i++)
+				{
+					if (_speed_history[i] != (float)LV_CHART_POINT_NONE && _speed_history[i] >= 0.0f && _speed_history[i] < 200.0f)
+					{
+						_speed_history[i] *= ratio;
+						lv_chart_set_value_by_id(_chart, _ser_speed, i, (lv_coord_t)(_speed_history[i] * 10.0f));
+						if (_speed_history[i] < min_val) min_val = _speed_history[i];
+						if (_speed_history[i] > max_val) max_val = _speed_history[i];
+						valid_points = true;
+					}
+					if (_gust_history[i] != (float)LV_CHART_POINT_NONE && _gust_history[i] >= 0.0f && _gust_history[i] < 200.0f)
+					{
+						_gust_history[i] *= ratio;
+						lv_chart_set_value_by_id(_chart, _ser_gust, i, (lv_coord_t)(_gust_history[i] * 10.0f));
+						if (_gust_history[i] < min_val) min_val = _gust_history[i];
+						if (_gust_history[i] > max_val) max_val = _gust_history[i];
+						valid_points = true;
+					}
+				}
+				if (valid_points)
+				{
+					float chart_max = max_val * 1.10f;
+					float chart_min = min_val * 0.90f;
+					if (chart_min < 0.0f) chart_min = 0.0f;
+					float min_span = 2.0f;
+					if (strcmp(units, "km/h") == 0) min_span = 10.0f;
+					else if (strcmp(units, "mph") == 0 || strcmp(units, "mi/h") == 0) min_span = 8.0f;
+					else if (strcmp(units, "knots") == 0 || strcmp(units, "kts") == 0 || strcmp(units, "kn") == 0) min_span = 6.0f;
+					else if (strcmp(units, "ft/s") == 0) min_span = 8.0f;
+					else if (strcmp(units, "bft") == 0) min_span = 3.0f;
+					if ((chart_max - chart_min) < min_span) chart_max = chart_min + min_span;
+					lv_chart_set_range(_chart, LV_CHART_AXIS_PRIMARY_Y, (lv_coord_t)(chart_min * 10.0f), (lv_coord_t)(chart_max * 10.0f));
+					char lbl_buf[16];
+					snprintf(lbl_buf, sizeof(lbl_buf), "%.0f", chart_max);
+					_lbl_chart_max.text(lbl_buf);
+					_lbl_chart_max.realign();
+					snprintf(lbl_buf, sizeof(lbl_buf), "%.0f", (chart_min + chart_max) / 2.0f);
+					_lbl_chart_mid.text(lbl_buf);
+					_lbl_chart_mid.realign();
+					snprintf(lbl_buf, sizeof(lbl_buf), "%.0f", chart_min);
+					_lbl_chart_min.text(lbl_buf);
+					_lbl_chart_min.realign();
+				}
+				lv_chart_refresh(_chart);
+			}
+		}
+
 		strncpy(_last_units, units, sizeof(_last_units) - 1);
 		_last_units[sizeof(_last_units) - 1] = '\0';
 
@@ -978,8 +1096,10 @@ WindDualTile& WindDualTile::units(const char *units)
 		{
 			int max_y = 15; // default for m/s
 			if (strcmp(units, "km/h") == 0) max_y = 60;
-			else if (strcmp(units, "mph") == 0) max_y = 40;
-			else if (strcmp(units, "knots") == 0 || strcmp(units, "kts") == 0) max_y = 35;
+			else if (strcmp(units, "mph") == 0 || strcmp(units, "mi/h") == 0) max_y = 40;
+			else if (strcmp(units, "knots") == 0 || strcmp(units, "kts") == 0 || strcmp(units, "kn") == 0) max_y = 35;
+			else if (strcmp(units, "ft/s") == 0) max_y = 50;
+			else if (strcmp(units, "bft") == 0) max_y = 12;
 			else if (strcmp(units, "m/s") == 0) max_y = 15;
 
 			lv_chart_set_range(_chart, LV_CHART_AXIS_PRIMARY_Y, 0, (lv_coord_t)(max_y * 10.0f));
@@ -1091,8 +1211,10 @@ void WindDualTile::tick_chart()
 
 				float min_span = 2.0f; // default for m/s
 				if (strcmp(_last_units, "km/h") == 0) min_span = 10.0f;
-				else if (strcmp(_last_units, "mph") == 0) min_span = 8.0f;
-				else if (strcmp(_last_units, "knots") == 0 || strcmp(_last_units, "kts") == 0) min_span = 6.0f;
+				else if (strcmp(_last_units, "mph") == 0 || strcmp(_last_units, "mi/h") == 0) min_span = 8.0f;
+				else if (strcmp(_last_units, "knots") == 0 || strcmp(_last_units, "kts") == 0 || strcmp(_last_units, "kn") == 0) min_span = 6.0f;
+				else if (strcmp(_last_units, "ft/s") == 0) min_span = 8.0f;
+				else if (strcmp(_last_units, "bft") == 0) min_span = 3.0f;
 
 				if ((chart_max - chart_min) < min_span)
 				{

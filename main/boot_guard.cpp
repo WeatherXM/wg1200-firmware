@@ -130,6 +130,7 @@ static bool try_rollback(nvs_handle_t handle, uint8_t crash_cnt, esp_reset_reaso
 ******************************************************************************/
 static void healthy_timer_cb(void *arg)
 {
+	ESP_LOGI(TAG, "Healthy uptime window (%ds) reached.", HEALTHY_UPTIME_SEC);
 	mark_healthy();
 }
 
@@ -150,13 +151,16 @@ RetResult init()
 	// leaves a flag in NVS before restarting
 	uint8_t swd_flag = 0;
 	nvs_get_u8(handle, NVS_KEY_SWD_FLAG, &swd_flag);
+	bool nvs_dirty = false;
 	if(swd_flag)
 	{
 		nvs_erase_key(handle, NVS_KEY_SWD_FLAG);
+		nvs_dirty = true;
 	}
 
 	uint8_t crash_cnt = 0;
-	nvs_get_u8(handle, NVS_KEY_CRASH_CNT, &crash_cnt);
+	esp_err_t crash_err = nvs_get_u8(handle, NVS_KEY_CRASH_CNT, &crash_cnt);
+	uint8_t prev_crash_cnt = crash_cnt;
 
 	esp_reset_reason_t reason = esp_reset_reason();
 
@@ -172,8 +176,15 @@ RetResult init()
 				 (int)reason, (int)swd_flag, crash_cnt, MAX_CRASH_BOOTS);
 	}
 
-	nvs_set_u8(handle, NVS_KEY_CRASH_CNT, crash_cnt);
-	nvs_commit(handle);
+	if(crash_err != ESP_OK || crash_cnt != prev_crash_cnt)
+	{
+		nvs_set_u8(handle, NVS_KEY_CRASH_CNT, crash_cnt);
+		nvs_dirty = true;
+	}
+	if(nvs_dirty)
+	{
+		nvs_commit(handle);
+	}
 
 	if(crash_cnt >= MAX_CRASH_BOOTS)
 	{
@@ -211,6 +222,12 @@ RetResult init()
 ******************************************************************************/
 void mark_healthy()
 {
+	static bool s_healthy_done = false;
+	if(s_healthy_done)
+	{
+		return;
+	}
+
 	nvs_handle_t handle;
 	if(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK)
 	{
@@ -225,9 +242,14 @@ void mark_healthy()
 		nvs_set_u8(handle, NVS_KEY_CRASH_CNT, 0);
 		nvs_commit(handle);
 	}
+	else
+	{
+		ESP_LOGI(TAG, "Boot confirmed healthy.");
+	}
 
 	// Report a pending rollback record. Kept until Log accepts it (needs valid
 	// RTC time), then erased so it is reported exactly once.
+	bool rb_pending = false;
 	uint8_t rb_cnt = 0;
 	if(nvs_get_u8(handle, NVS_KEY_RB_CNT, &rb_cnt) == ESP_OK)
 	{
@@ -246,9 +268,18 @@ void mark_healthy()
 			nvs_erase_key(handle, NVS_KEY_RB_POSSIBLE);
 			nvs_commit(handle);
 		}
+		else
+		{
+			rb_pending = true;
+		}
 	}
 
 	nvs_close(handle);
+
+	if(!rb_pending)
+	{
+		s_healthy_done = true;
+	}
 }
 
 /******************************************************************************

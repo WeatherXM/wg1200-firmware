@@ -532,6 +532,11 @@ const uint32_t POST_PACKET_COOLDOWN_MS = 6000;
 const uint32_t PRE_PACKET_GUARD_MS = 7000;
 const uint32_t SAFE_SUBMIT_OFFSET_MS = 6500;
 
+const uint32_t SCAN_PASS1_WS1300_DWELL_MS = WS_SNIFF_HOP_INTERVAL_MS; // 22000 ms
+const uint32_t SCAN_PASS2_WS1300_DWELL_MS = 45000;                     // 45s (>2x WS1300 20s tx period)
+const uint32_t SCAN_PASS1_WS1001_DWELL_MS = 60000;                     // 60s
+const uint32_t SCAN_PASS2_WS1001_DWELL_MS = 90000;                     // 90s (>5x WS1001 16s tx period)
+
 static uint32_t get_ws1300_channel_dwell_ms()
 {
 	if (_fallback_phase == AutoFallbackPhase::PHASE_WS1300_SWEEP)
@@ -540,16 +545,16 @@ static uint32_t get_ws1300_channel_dwell_ms()
 	}
 	if (Settings::get_pair_mode() == PairMode::PAIR_MODE_SCAN)
 	{
-		// Pass 1: quick sweep (22s). Pass 2: deep sweep (5 min = 300,000 ms)
-		return (_scan_cycle_count == 0) ? WS_SNIFF_HOP_INTERVAL_MS : (5 * 60 * 1000);
+		// Pass 1: quick sweep (22s). Pass 2: deep sweep (45s)
+		return (_scan_cycle_count == 0) ? SCAN_PASS1_WS1300_DWELL_MS : SCAN_PASS2_WS1300_DWELL_MS;
 	}
 	return WS_SNIFF_HOP_INTERVAL_MS;
 }
 
 static uint32_t get_ws1001_channel_dwell_ms()
 {
-	// Pass 1: fast (60s). Pass 2: deep (5 min = 300,000 ms)
-	return (_scan_cycle_count == 0) ? 60000 : (5 * 60 * 1000);
+	// Pass 1: fast (60s). Pass 2: deep (90s)
+	return (_scan_cycle_count == 0) ? SCAN_PASS1_WS1001_DWELL_MS : SCAN_PASS2_WS1001_DWELL_MS;
 }
 
 /** Consecutive bad-value packets required before the station is reported as
@@ -2801,7 +2806,7 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 		}
 
 		if (ret != WsCommon::RetRes::OK &&
-			(g_sniff_mode_enabled || g_receiver_profile == WsType::WS_TYPE_ALL))
+			(g_sniff_mode_enabled || g_receiver_profile == WsType::WS_TYPE_ALL || g_manual_listen_slot >= 0))
 		{
 			WsBase::MultiStation* sniff_station = NULL;
 			if (try_sniff_decode(&pkt_received, &sniff_station, &sniff_field_pack, &sniff_gps_data))
@@ -2815,7 +2820,7 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 			// else: keep packet_handler's ret, handled by the error path below
 		}
 	}
-	else if (g_sniff_mode_enabled || g_receiver_profile == WsType::WS_TYPE_ALL)
+	else if (g_sniff_mode_enabled || g_receiver_profile == WsType::WS_TYPE_ALL || g_manual_listen_slot >= 0)
 	{
 		if (try_sniff_decode(&pkt_received, &active_station, &sniff_field_pack, &sniff_gps_data))
 		{
@@ -3440,7 +3445,12 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 			g_ownership_challenge_armed = false;
 			g_ownership_challenge_pending = false;
 			g_ownership_confirmed = true;
-			Settings::set_station_ownership_confirmed(true, _state.pair_data.id, (uint32_t)time(NULL));
+			uint32_t own_ts = (Settings::is_station_ownership_confirmed() &&
+			                   Settings::get_station_ownership_id() == _state.pair_data.id &&
+			                   Settings::get_station_ownership_timestamp() != 0)
+			                      ? Settings::get_station_ownership_timestamp()
+			                      : (uint32_t)time(NULL);
+			Settings::set_station_ownership_confirmed(true, _state.pair_data.id, own_ts);
 
 			// Confirm ownership: store strictly to Local NVS, preserving Cloud NVS!
 			Settings::set_ws_id(_state.pair_data.id);
@@ -3490,21 +3500,6 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 		else if(gw_ctx.time_is_valid)
 		{
 			gps_data.field_pack.ts = time(NULL);
-		}
-
-		float lon = 0.0f;
-		if(WsFields::get_field_val_from_pack(&gps_data.field_pack, WsFields::FieldType::GPS_LON, NULL, &lon) == WsCommon::RetRes::OK)
-		{
-			int auto_tz = (int)roundf(lon / 15.0f);
-			if(auto_tz < -12) auto_tz = -12;
-			if(auto_tz > 14) auto_tz = 14;
-
-			if(Settings::get_tz_offset() != auto_tz)
-			{
-				ESP_LOGI(TAG, "Updating timezone offset from GPS location: UTC%+d (lon: %.4f)", auto_tz, lon);
-				Settings::set_tz_offset(auto_tz);
-				Settings::commit();
-			}
 		}
 
 		if(gps_data.field_pack.ts != 0)
@@ -3574,11 +3569,6 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 				(Settings::get_pair_mode() != PairMode::PAIR_MODE_OFF) &&
 				!foreign_packet;
 
-			if(paired_and_not_foreign)
-			{
-				WsData::update_precip_rate_params(&field_pack);
-			}
-
 			if(field_pack.bad_values_detected)
 			{
 				// bad data exist
@@ -3606,16 +3596,23 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 				{
 					ESP_LOGI(TAG, "Non-weather packet: not adding to telemetry buffer");
 				}
-				else if(WsData::add(&field_pack) == WsCommon::RetRes::OK)
+				else
 				{
-					ESP_LOGI(TAG, "Valid packet added to buffer. Len: %d", WsData::get_recv_count());
-				}			
-				else // Failed to add to buffer, probably full
-				{
-					ESP_LOGI(TAG, "Could not add packet to recv buffer.");
-					if(WsData::get_recv_count() == WS_DATA_RECEIVE_BUFF_ITEMS)
+					if(paired_and_not_foreign)
 					{
-						ESP_LOGI(TAG, "Buffer full.");
+						WsData::update_precip_rate_params(&field_pack);
+					}
+					if(WsData::add(&field_pack) == WsCommon::RetRes::OK)
+					{
+						ESP_LOGI(TAG, "Valid packet added to buffer. Len: %d", WsData::get_recv_count());
+					}			
+					else // Failed to add to buffer, probably full
+					{
+						ESP_LOGI(TAG, "Could not add packet to recv buffer.");
+						if(WsData::get_recv_count() == WS_DATA_RECEIVE_BUFF_ITEMS)
+						{
+							ESP_LOGI(TAG, "Buffer full.");
+						}
 					}
 				}
 			}
@@ -5124,13 +5121,20 @@ RetResult apply_pair_mode(PairMode mode, uint32_t scan_target_id,
 					_scan_phase = ScanPhase::WS1300;
 					set_cur_station_obj(WsType::WS_TYPE_1300);
 					g_receiver_profile = WsType::WS_TYPE_1300;
-					g_sniff_slot = 1;
+					g_sniff_slot = (g_scan_target_slot >= 0) ? (uint8_t)g_scan_target_slot : 1;
 					g_sniff_channel = 0;
 					_sniff_slot_tuned_ts_ms = Utils::get_tick_ms();
 					_sniff_slot_hold_until_ms = 0;
 					tune_sniff_slot();
 					sx126x_rx_cont();
-					ESP_LOGI(TAG, "Starting dedicated WS1300-only channel sweep (starting on slot %u / CH0)", (unsigned int)g_sniff_slot);
+					if (g_scan_target_slot >= 0)
+					{
+						ESP_LOGI(TAG, "Starting dedicated WS1300 scan locked directly to slot %u", (unsigned int)g_sniff_slot);
+					}
+					else
+					{
+						ESP_LOGI(TAG, "Starting dedicated WS1300-only channel sweep (starting on slot %u / CH0)", (unsigned int)g_sniff_slot);
+					}
 				}
 				else if (g_scan_profile == WsType::WS_TYPE_1001)
 				{
@@ -6122,15 +6126,15 @@ uint32_t get_scan_eta_sec()
 	{
 		if (g_scan_profile == WsType::WS_TYPE_1001)
 		{
-			total_remain_ms += 300000;
+			total_remain_ms += SCAN_PASS2_WS1001_DWELL_MS;
 		}
 		else if (g_scan_profile == WsType::WS_TYPE_1300)
 		{
-			total_remain_ms += 8 * 300000;
+			total_remain_ms += 8 * SCAN_PASS2_WS1300_DWELL_MS;
 		}
 		else
 		{
-			total_remain_ms += 9 * 300000;
+			total_remain_ms += SCAN_PASS2_WS1001_DWELL_MS + (8 * SCAN_PASS2_WS1300_DWELL_MS);
 		}
 	}
 

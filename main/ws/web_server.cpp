@@ -19,6 +19,7 @@
 #include "include/app_config.h"
 #include "pressure.h"
 #include "settings.h"
+#include "submit.h"
 #include "tb.h"
 #include "utils.h"
 #include "wifi.h"
@@ -381,6 +382,11 @@ static const char g_dashboard_html[] = R"html(
             100% { transform: rotate(360deg); }
         }
 
+        @keyframes progress-shimmer {
+            0% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
         /* Navigation Bar */
         .nav-bar {
             display: flex;
@@ -624,24 +630,138 @@ static const char g_dashboard_html[] = R"html(
             width: 100% !important;
         }
 
-        /* History Grid Layout & Legends */
+        /* History Grid Layout, Summary Badges & Non-Wrapping Tabular Legends */
         #history-container .grid-charts {
             display: grid !important;
-            grid-template-columns: repeat(2, 1fr) !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
             gap: 1rem !important;
             width: 100% !important;
         }
 
+        #history-container .grid-charts > .card {
+            min-width: 0 !important;
+            overflow: hidden !important;
+        }
+
         @media (max-width: 850px) {
             #history-container .grid-charts {
-                grid-template-columns: 1fr !important;
+                grid-template-columns: minmax(0, 1fr) !important;
             }
         }
 
+        .hist-card-header {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            margin-bottom: 0.55rem;
+        }
+
+        .hist-card-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .hist-card-title-row h3 {
+            margin: 0;
+            font-size: 0.98rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+
+        .hist-stats-strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem 0.5rem;
+            align-items: center;
+            min-height: 22px;
+        }
+
+        .hist-stat-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            font-size: 0.69rem;
+            line-height: 1.2;
+            padding: 0.16rem 0.45rem;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.035);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .hist-stat-pill .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .hist-stat-pill strong {
+            color: var(--text);
+            font-weight: 600;
+        }
+
         #history-container .uplot .u-legend {
-            font-size: 0.8rem !important;
-            padding: 0.25rem 0.5rem !important;
-            margin-bottom: 0.5rem !important;
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            gap: 0.45rem !important;
+            font-size: 0.72rem !important;
+            font-variant-numeric: tabular-nums !important;
+            padding: 0.2rem 0.3rem !important;
+            margin: 0.25rem 0 0 0 !important;
+            height: 26px !important;
+            min-height: 26px !important;
+            max-height: 26px !important;
+            white-space: nowrap !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            scrollbar-width: none !important;
+        }
+
+        #history-container .uplot .u-legend::-webkit-scrollbar {
+            display: none !important;
+        }
+
+        #history-container .uplot .u-legend .u-series {
+            display: inline-flex !important;
+            align-items: center !important;
+            flex-shrink: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+
+        #history-container .uplot .u-legend .u-series th,
+        #history-container .uplot .u-legend .u-series td {
+            padding: 0 2px !important;
+            white-space: nowrap !important;
+        }
+
+        #history-container .uplot .u-legend .u-marker {
+            width: 8px !important;
+            height: 8px !important;
+            border-radius: 2px !important;
+            margin-right: 3px !important;
+        }
+
+        #history-container .uplot .u-legend .u-value {
+            display: inline-block !important;
+            min-width: 5.2ch !important;
+            text-align: left !important;
+            font-variant-numeric: tabular-nums !important;
+            color: var(--text) !important;
+            font-weight: 600 !important;
+        }
+
+        #history-container .uplot .u-legend .u-series:first-child .u-value {
+            min-width: 9.6ch !important;
+            color: var(--primary) !important;
         }
 
         .table-packets {
@@ -1097,6 +1217,36 @@ static const char g_dashboard_html[] = R"html(
             <button id="tab-docs" class="nav-item" onclick="switchTab('docs')">API Docs</button>
         </nav>
 
+        <!-- Global Unusable SD Card Warning Banner -->
+        <div id="sd-unusable-banner" style="display: none; margin-bottom: 1.25rem; padding: 0.85rem 1.1rem; border-radius: 12px; background: rgba(255, 65, 108, 0.1); border: 1px solid rgba(255, 65, 108, 0.35); align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.8rem;">
+            <div style="display: flex; align-items: flex-start; gap: 0.65rem; flex: 1 1 280px;">
+                <span style="font-size: 1.2rem; line-height: 1.2;">⚠️</span>
+                <div>
+                    <div id="sd-unusable-banner-title" style="font-weight: 700; font-size: 0.88rem; color: #ff416c; margin-bottom: 0.15rem;">microSD Card Cannot Be Used (Format Required)</div>
+                    <div id="sd-unusable-banner-desc" style="font-size: 0.78rem; color: var(--text-muted); line-height: 1.35;">A microSD card is inserted, but it is unformatted or uses an unsupported filesystem. Gateway operation continues normally without SD logging.</div>
+                </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <button onclick="switchTab('history')" style="background: rgba(255, 255, 255, 0.08); border: 1px solid var(--card-border); color: #fff; font-weight: 600; font-size: 0.75rem; padding: 0.4rem 0.85rem; border-radius: 8px; cursor: pointer;">Inspect Card</button>
+                <button onclick="switchTab('history'); formatSdCard();" style="background: linear-gradient(135deg, #ff416c, #ff4b2b); border: none; color: #fff; font-weight: 700; font-size: 0.75rem; padding: 0.4rem 0.9rem; border-radius: 8px; cursor: pointer;">Format as FAT32</button>
+            </div>
+        </div>
+
+        <!-- Global Ejected SD Card Notice Banner -->
+        <div id="sd-ejected-banner" style="display: none; margin-bottom: 1.25rem; padding: 0.85rem 1.1rem; border-radius: 12px; background: rgba(255, 177, 0, 0.1); border: 1px solid rgba(255, 177, 0, 0.4); align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.8rem;">
+            <div style="display: flex; align-items: flex-start; gap: 0.65rem; flex: 1 1 280px;">
+                <span style="font-size: 1.2rem; line-height: 1.2;">⏏️</span>
+                <div>
+                    <div id="sd-ejected-banner-title" style="font-weight: 700; font-size: 0.88rem; color: #ffb100; margin-bottom: 0.15rem;">microSD Card Ready to Eject (Unmounted)</div>
+                    <div id="sd-ejected-banner-desc" style="font-size: 0.78rem; color: var(--text-muted); line-height: 1.35;">The microSD card is safely unmounted and logging is paused. Remove the card now, or click "Mount SD Card" to resume logging.</div>
+                </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <button onclick="switchTab('history')" style="background: rgba(255, 255, 255, 0.08); border: 1px solid var(--card-border); color: #fff; font-weight: 600; font-size: 0.75rem; padding: 0.4rem 0.85rem; border-radius: 8px; cursor: pointer;">Open SD Panel</button>
+                <button onclick="mountSdCard()" style="background: linear-gradient(135deg, #00f5a0, #00b4db); border: none; color: #0b0f19; font-weight: 700; font-size: 0.75rem; padding: 0.4rem 0.9rem; border-radius: 8px; cursor: pointer;">Mount SD Card</button>
+            </div>
+        </div>
+
         <!-- Dashboard View -->
         <div id="page-dashboard" class="page-content">
             <div class="grid-stats">
@@ -1163,6 +1313,7 @@ static const char g_dashboard_html[] = R"html(
                         <div class="card-weather">
                             <div class="w-title">Precip Rate</div>
                             <div class="w-val" id="w-precip-rate">-</div>
+                            <div class="w-sub" id="w-precip-daily">-</div>
                         </div>
                         <div class="card-weather">
                             <div class="w-title">Pressure</div>
@@ -1262,6 +1413,53 @@ static const char g_dashboard_html[] = R"html(
                         <div class="progress-bar" id="progress-fill"></div>
                     </div>
                     <div id="ota-status" style="font-size: 0.72rem; margin-top: 0.25rem;">Ready</div>
+
+                    <!-- Display Units (Synchronized with LCD Screen) -->
+                    <div style="margin-top: 1.05rem; padding-top: 0.9rem; border-top: 1px solid rgba(255,255,255,0.08);">
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.3rem;">
+                            <h3 style="font-size: 0.95rem; margin: 0; display: flex; align-items: center; gap: 0.45rem;">
+                                Display Units
+                                <span class="badge-slot" style="background: rgba(0, 210, 255, 0.14); color: #00d2ff; font-size: 0.62rem; padding: 0.12rem 0.4rem; border-radius: 4px; font-weight: 700; text-transform: uppercase; margin-bottom: 0;">Web &amp; LCD Sync</span>
+                            </h3>
+                            <span id="unit-sync-status" style="font-size: 0.7rem; color: var(--text-muted);">Synced with LCD</span>
+                        </div>
+                        <p style="color: var(--text-muted); font-size: 0.74rem; margin-top: 0; margin-bottom: 0.65rem;">Changes apply immediately to both the Web UI (cards &amp; charts) and the gateway LCD screen.</p>
+                        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem;">
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.5rem 0.65rem; background: rgba(255,255,255,0.02); border: 1px solid var(--card-border); border-radius: 8px;">
+                                <label for="unit-temp-select" style="font-size: 0.78rem; font-weight: 600; color: var(--text-color);">Temperature</label>
+                                <select id="unit-temp-select" onchange="setDisplayUnits()" style="background: rgba(30, 30, 30, 0.85); border: 1px solid rgba(255, 255, 255, 0.16); color: #00d2ff; font-size: 0.76rem; font-weight: 600; padding: 0.25rem 0.45rem; border-radius: 6px; outline: none; cursor: pointer;">
+                                    <option value="0">°C (Celsius)</option>
+                                    <option value="1">°F (Fahrenheit)</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.5rem 0.65rem; background: rgba(255,255,255,0.02); border: 1px solid var(--card-border); border-radius: 8px;">
+                                <label for="unit-wind-select" style="font-size: 0.78rem; font-weight: 600; color: var(--text-color);">Wind Speed</label>
+                                <select id="unit-wind-select" onchange="setDisplayUnits()" style="background: rgba(30, 30, 30, 0.85); border: 1px solid rgba(255, 255, 255, 0.16); color: #00d2ff; font-size: 0.76rem; font-weight: 600; padding: 0.25rem 0.45rem; border-radius: 6px; outline: none; cursor: pointer;">
+                                    <option value="0">m/s</option>
+                                    <option value="1">km/h</option>
+                                    <option value="2">mph</option>
+                                    <option value="3">ft/s</option>
+                                    <option value="4">bft</option>
+                                    <option value="5">kn</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.5rem 0.65rem; background: rgba(255,255,255,0.02); border: 1px solid var(--card-border); border-radius: 8px;">
+                                <label for="unit-precip-select" style="font-size: 0.78rem; font-weight: 600; color: var(--text-color);">Precipitation</label>
+                                <select id="unit-precip-select" onchange="setDisplayUnits()" style="background: rgba(30, 30, 30, 0.85); border: 1px solid rgba(255, 255, 255, 0.16); color: #00d2ff; font-size: 0.76rem; font-weight: 600; padding: 0.25rem 0.45rem; border-radius: 6px; outline: none; cursor: pointer;">
+                                    <option value="0">mm</option>
+                                    <option value="1">in</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.5rem 0.65rem; background: rgba(255,255,255,0.02); border: 1px solid var(--card-border); border-radius: 8px;">
+                                <label for="unit-press-select" style="font-size: 0.78rem; font-weight: 600; color: var(--text-color);">Pressure</label>
+                                <select id="unit-press-select" onchange="setDisplayUnits()" style="background: rgba(30, 30, 30, 0.85); border: 1px solid rgba(255, 255, 255, 0.16); color: #00d2ff; font-size: 0.76rem; font-weight: 600; padding: 0.25rem 0.45rem; border-radius: 6px; outline: none; cursor: pointer;">
+                                    <option value="0">hPa</option>
+                                    <option value="1">mmHg</option>
+                                    <option value="2">inHg</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
 
                     <!-- Local API Security (Disabled / Coming Soon) -->
                     <div style="margin-top: 0.9rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.06); opacity: 0.5;">
@@ -2303,7 +2501,7 @@ static const char g_dashboard_html[] = R"html(
                         <button id="btn-scan-toggle" onclick="toggleDiscoveryScan()" class="btn-sm-ctrl" style="font-weight: 700; font-size: 0.76rem; padding: 0.35rem 0.7rem; background: rgba(187, 134, 252, 0.18); border-color: #bb86fc; color: #bb86fc; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 0.35rem; width: 100%;">
                             <span id="btn-scan-icon">🔍</span><span id="btn-scan-text">START SCAN (ALL)</span>
                         </button>
-                        <p id="scan-idle-caption" style="color: var(--text-muted); font-size: 0.73rem; margin: 0; line-height: 1.3;">Sweeps WS1001 base + WS1300 CH0–CH7 in 2 passes (quick + 5-min deep). ~48 min total.</p>
+                        <p id="scan-idle-caption" style="color: var(--text-muted); font-size: 0.73rem; margin: 0; line-height: 1.3;">Sweeps WS1001 base + WS1300 CH0–CH7 in 2 passes (quick + deep). ~11 min total.</p>
                         <div id="scan-progress-info" style="font-size: 0.75rem; display: none;"></div>
                     </div>
 
@@ -2926,8 +3124,16 @@ static const char g_dashboard_html[] = R"html(
         <!-- History View -->
         <div id="page-history" class="page-content" style="display: none;">
             <div class="card" style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 1.5rem; margin-bottom: 1.5rem; backdrop-filter: var(--glass-blur);">
-                <h2 style="margin-top: 0; margin-bottom: 0.5rem; background: linear-gradient(135deg, var(--primary), var(--secondary)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-size: 1.4rem;">Historical Weather Trends</h2>
-                <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1.5rem;">Aggregated 5-min weather history of the last 24 hours.</p>
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.1rem;">
+                    <div>
+                        <h2 style="margin-top: 0; margin-bottom: 0.35rem; background: linear-gradient(135deg, var(--primary), var(--secondary)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-size: 1.4rem;">Historical Weather Trends</h2>
+                        <p style="color: var(--text-muted); font-size: 0.83rem; margin: 0;">Aggregated 5-min weather history of the last 24 hours · Synchronized crosshair &amp; zoom across all charts.</p>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                        <span style="font-size: 0.72rem; color: var(--text-muted); background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); padding: 0.28rem 0.6rem; border-radius: 999px;">Drag to zoom · Double-click to reset</span>
+                        <button type="button" onclick="resetHistoryZoom()" style="background: rgba(0, 229, 255, 0.1); border: 1px solid rgba(0, 229, 255, 0.28); color: var(--primary); font-size: 0.73rem; font-weight: 600; padding: 0.28rem 0.65rem; border-radius: 8px; cursor: pointer;">Reset Zoom</button>
+                    </div>
+                </div>
                 <div id="history-container" style="width: 100%; display: flex; flex-direction: column; gap: 1.5rem;">
                     <div style="text-align: center; color: var(--text-muted); padding: 3rem;">
                         Loading 24-Hour aggregated history...
@@ -2949,6 +3155,8 @@ static const char g_dashboard_html[] = R"html(
                         </div>
                         <div style="display: flex; gap: 0.6rem; flex-wrap: wrap;">
                             <button id="sd-refresh-btn" class="upload-btn" onclick="updateSdCardInfo()" style="background: rgba(255,255,255,0.05); color: #fff; border: 1px solid var(--card-border); font-size: 0.75rem; padding: 0.4rem 1rem; border-radius: 8px; cursor: pointer;">Refresh</button>
+                            <button id="sd-eject-btn" class="upload-btn" onclick="ejectSdCard()" style="background: rgba(255, 177, 0, 0.16); color: #ffb100; border: 1px solid rgba(255, 177, 0, 0.45); font-size: 0.75rem; padding: 0.4rem 1rem; border-radius: 8px; cursor: pointer;">Eject SD Card</button>
+                            <button id="sd-mount-btn" class="upload-btn" onclick="mountSdCard()" style="display: none; background: rgba(0, 245, 160, 0.16); color: #00f5a0; border: 1px solid rgba(0, 245, 160, 0.45); font-size: 0.75rem; padding: 0.4rem 1rem; border-radius: 8px; cursor: pointer;">Mount SD Card</button>
                             <button id="sd-test-btn" class="upload-btn" onclick="testSdCard()" style="background: linear-gradient(135deg, #00b4db, #0083b0); font-size: 0.75rem; padding: 0.4rem 1rem; border-radius: 8px;">Test SD Card (W/R)</button>
                             <button class="upload-btn" onclick="formatSdCard()" style="background: linear-gradient(135deg, #ff416c, #ff4b2b); font-size: 0.75rem; padding: 0.4rem 1rem; border-radius: 8px;">Format SD Card</button>
                         </div>
@@ -3003,9 +3211,13 @@ static const char g_dashboard_html[] = R"html(
                     </div>
                     <h3 id="sd-format-modal-title" style="margin: 0 0 0.75rem 0; font-size: 1.3rem; color: #fff;">Formatting SD Card</h3>
                     <p id="sd-format-modal-msg" style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.5; margin: 0 0 1rem 0;">
-                        Formatting in progress... This takes <strong>~30 seconds</strong>.<br>
+                        Formatting in progress...<br>
                         Please do not turn off or unplug the device.
                     </p>
+                    <div id="sd-format-progress-container" style="display: none; width: 100%; background: rgba(255,255,255,0.08); height: 10px; border-radius: 6px; overflow: hidden; margin-bottom: 0.6rem; border: 1px solid rgba(255,255,255,0.05);">
+                        <div id="sd-format-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #ff416c 0%, #ff4b2b 25%, #00f5a0 50%, #ff416c 75%, #ff4b2b 100%); background-size: 200% 100%; animation: progress-shimmer 2s linear infinite; transition: width 0.3s ease; border-radius: 6px;"></div>
+                    </div>
+                    <div id="sd-format-eta" style="display: none; font-size: 0.82rem; color: #00f5a0; font-weight: 600; margin-bottom: 0.8rem;"></div>
                     <div id="sd-format-modal-status" style="display: none; font-size: 0.85rem; font-weight: 600; padding: 0.6rem 1rem; border-radius: 8px; margin-top: 0.5rem;"></div>
                 </div>
             </div>
@@ -3681,10 +3893,88 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                     g_isScreenless = isScreenless;
                     const sdCardPanel = document.getElementById('sd-card-panel');
                     if (sdCardPanel) sdCardPanel.style.display = isScreenless ? 'none' : 'block';
+                    const sdBanner = document.getElementById('sd-unusable-banner');
+                    if (sdBanner) {
+                        if (!isScreenless && data.sd_unusable) {
+                            const sdBannerText = document.getElementById('sd-unusable-banner-text');
+                            if (sdBannerText) {
+                                const capStr = data.sd_capacity_gb > 0 ? ` (${Number(data.sd_capacity_gb).toFixed(1)} GB)` : '';
+                                const fsStr = data.sd_fs_type ? ` [${data.sd_fs_type}]` : '';
+                                const reasonStr = data.sd_status_reason || 'Inserted microSD card does not contain a mountable FAT16/FAT32 filesystem.';
+                                sdBannerText.textContent = `microSD card${capStr}${fsStr} cannot be used: ${reasonStr} Open Connections -> SD Card and click "Format SD Card" to initialize it as FAT32. Gateway operation continues normally.`;
+                            }
+                            sdBanner.style.display = 'flex';
+                        } else {
+                            sdBanner.style.display = 'none';
+                        }
+                    }
+                    const sdEjectedBanner = document.getElementById('sd-ejected-banner');
+                    if (sdEjectedBanner) {
+                        if (!isScreenless && data.sd_ejected) {
+                            const titleEl = document.getElementById('sd-ejected-banner-title');
+                            const descEl = document.getElementById('sd-ejected-banner-desc');
+                            if (titleEl) {
+                                titleEl.textContent = data.sd_present
+                                    ? 'microSD Card Ready to Eject (Safe to Remove)'
+                                    : 'microSD Card Ejected (Card Removed)';
+                            }
+                            if (descEl) {
+                                descEl.textContent = data.sd_present
+                                    ? 'The microSD card is safely unmounted and SD logging is paused. Remove the card now, or click "Mount SD Card" to resume logging.'
+                                    : 'The microSD card is in the ejected state and physically removed. Re-insert the card to automatically mount it, or click "Mount SD Card".';
+                            }
+                            sdEjectedBanner.style.display = 'flex';
+                        } else {
+                            sdEjectedBanner.style.display = 'none';
+                        }
+                    }
+                    window.g_sdCapacityGb = data.sd_capacity_gb || 0;
+
+                    if (data.units) {
+                        const u = data.units;
+                        const prevSig = window.g_unitsSignature || '';
+                        const newSig = `${u.temp_id}:${u.wind_id}:${u.precip_id}:${u.press_id}`;
+                        window.g_units = {
+                            temp_id: Number(u.temp_id) || 0,
+                            wind_id: Number(u.wind_id) || 0,
+                            precip_id: Number(u.precip_id) || 0,
+                            press_id: Number(u.press_id) || 0,
+                            temp: u.temp || 'C',
+                            wind: u.wind || 'm/s',
+                            precip: u.precip || 'mm',
+                            press: u.press || 'hPa'
+                        };
+                        const tempSel = document.getElementById('unit-temp-select');
+                        if (tempSel && document.activeElement !== tempSel) tempSel.value = String(window.g_units.temp_id);
+                        const windSel = document.getElementById('unit-wind-select');
+                        if (windSel && document.activeElement !== windSel) windSel.value = String(window.g_units.wind_id);
+                        const precipSel = document.getElementById('unit-precip-select');
+                        if (precipSel && document.activeElement !== precipSel) precipSel.value = String(window.g_units.precip_id);
+                        const pressSel = document.getElementById('unit-press-select');
+                        if (pressSel && document.activeElement !== pressSel) pressSel.value = String(window.g_units.press_id);
+
+                        if (prevSig && prevSig !== newSig) {
+                            if (typeof renderLiveChartData === 'function' && window.g_lastLiveTrendsData) {
+                                renderLiveChartData(window.g_lastLiveTrendsData, true);
+                            }
+                            if (typeof renderHistoryChartsData === 'function' && window.g_lastHistoryData &&
+                                document.getElementById('page-history') && document.getElementById('page-history').style.display === 'block') {
+                                renderHistoryChartsData(window.g_lastHistoryData);
+                            }
+                        }
+                        window.g_unitsSignature = newSig;
+                    }
 
                     const pressureValEl = document.getElementById('pressure-val');
                     if (pressureValEl) {
-                        pressureValEl.textContent = data.pressure_hpa > 0 ? `${data.pressure_hpa.toFixed(2)} hPa` : '-';
+                        if (data.pressure_hpa > 0) {
+                            const convP = typeof convertPressFromHpa === 'function' ? convertPressFromHpa(data.pressure_hpa) : data.pressure_hpa;
+                            const uPress = (window.g_units && window.g_units.press) ? window.g_units.press : 'hPa';
+                            const pDec = uPress === 'inHg' ? 2 : 1;
+                            pressureValEl.textContent = `${convP.toFixed(pDec)} ${uPress}`;
+                        } else {
+                            pressureValEl.textContent = '-';
+                        }
                     }
                     const baroSubEl = document.getElementById('baro-sensor-info');
                     if (baroSubEl) {
@@ -3782,19 +4072,23 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
 
                     if (data.weather) {
                         const w = data.weather;
+                        const tUnit = w.unit_temp ? (w.unit_temp.startsWith('°') ? w.unit_temp : `°${w.unit_temp}`) : '°C';
+                        const wDec = w.unit_wind === 'bft' ? 0 : 1;
+                        const pDec = w.unit_press === 'inHg' ? 2 : 1;
                         if (w.has_weather) {
                             const formatValue = (value, decimals, suffix) =>
                                 Number.isFinite(value) ? `${value.toFixed(decimals)} ${suffix}` : '-';
-                            document.getElementById('w-temp').textContent = formatValue(w.temp, 1, w.unit_temp);
-                            document.getElementById('w-feels-like').textContent = formatValue(w.feels_like, 1, w.unit_temp);
+                            document.getElementById('w-temp').textContent = formatValue(w.temp, 1, tUnit);
+                            document.getElementById('w-feels-like').textContent = formatValue(w.feels_like, 1, tUnit);
                             document.getElementById('w-humidity').textContent = formatValue(w.humidity, 0, '%');
-                            document.getElementById('w-wind-speed').textContent = formatValue(w.wind_speed, 1, w.unit_wind);
+                            document.getElementById('w-wind-speed').textContent = formatValue(w.wind_speed, wDec, w.unit_wind);
                             document.getElementById('w-wind-dir').textContent = Number.isFinite(w.wind_dir_deg)
                                 ? (w.wind_dir_cardinal ? `${w.wind_dir_deg.toFixed(0)}° (${w.wind_dir_cardinal})` : `${w.wind_dir_deg.toFixed(0)}°`)
                                 : '-';
-                            document.getElementById('w-wind-gust').textContent = formatValue(w.wind_gust, 1, w.unit_wind);
+                            document.getElementById('w-wind-gust').textContent = formatValue(w.wind_gust, wDec, w.unit_wind);
                             document.getElementById('w-precip-rate').textContent = formatValue(w.precip_rate, 2, `${w.unit_precip}/h`);
-                            document.getElementById('w-pressure').textContent = formatValue(w.pressure, 1, w.unit_press);
+                            document.getElementById('w-precip-daily').textContent = Number.isFinite(w.precip_daily) ? `Daily: ${w.precip_daily.toFixed(2)} ${w.unit_precip}` : 'Daily: -';
+                            document.getElementById('w-pressure').textContent = formatValue(w.pressure, pDec, w.unit_press);
                             document.getElementById('w-uv').textContent = `UV Index: ${w.uv}`;
                             document.getElementById('w-irradiance').textContent = formatValue(w.irradiance, 1, 'W/m²');
                         } else {
@@ -3805,8 +4099,9 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                             document.getElementById('w-wind-dir').textContent = '-';
                             document.getElementById('w-wind-gust').textContent = '-';
                             document.getElementById('w-precip-rate').textContent = '-';
+                            document.getElementById('w-precip-daily').textContent = 'Daily: -';
                             if (w.pressure > 0) {
-                                document.getElementById('w-pressure').textContent = `${w.pressure.toFixed(1)} ${w.unit_press}`;
+                                document.getElementById('w-pressure').textContent = `${w.pressure.toFixed(pDec)} ${w.unit_press}`;
                             } else {
                                 document.getElementById('w-pressure').textContent = '-';
                             }
@@ -4892,11 +5187,11 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                 if (scanBtnText) scanBtnText.textContent = `START SCAN (${scopeName})`;
                 if (scanIdleCaption) {
                     if (parsedType === 1300) {
-                        scanIdleCaption.textContent = 'Sweeps WS1300 Multi-Channel CH0–CH7 in 2 passes (quick + 5-min deep). ~42 min total.';
+                        scanIdleCaption.textContent = 'Sweeps WS1300 Multi-Channel CH0–CH7 in 2 passes (quick + deep). ~9 min total.';
                     } else if (parsedType === 1001) {
-                        scanIdleCaption.textContent = 'Scans WS1001 Single Channel Base frequency in 2 passes. ~6 min total.';
+                        scanIdleCaption.textContent = 'Scans WS1001 Single Channel Base frequency in 2 passes. ~2.5 min total.';
                     } else {
-                        scanIdleCaption.textContent = 'Sweeps WS1001 base + WS1300 CH0–CH7 in 2 passes (quick + 5-min deep). ~48 min total.';
+                        scanIdleCaption.textContent = 'Sweeps WS1001 base + WS1300 CH0–CH7 in 2 passes (quick + deep). ~11 min total.';
                     }
                 }
             }
@@ -5162,22 +5457,52 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
 
         // SD Card & Connections Helpers
         let sdRefreshInFlight = null;
+        let g_lastSdDiag = null;
+        let g_sdFormatTimer = null;
 
         function setSdFilesystemStatus(loggerData, diagnosticData) {
             const status = document.getElementById('sd-status-val');
             const note = document.getElementById('sd-refresh-note');
             if (!status || !note) return;
 
-            if ((loggerData && loggerData.mounted) ||
+            const isEjected = Boolean((loggerData && loggerData.ejected) || (diagnosticData && diagnosticData.ejected));
+            const isMounted = !isEjected && Boolean((loggerData && loggerData.mounted) || (!loggerData && diagnosticData && diagnosticData.mounted));
+            const isUnusable = !isEjected && Boolean((diagnosticData && diagnosticData.unusable) || (loggerData && loggerData.card_unusable));
+            const isPresent = (diagnosticData && diagnosticData.present !== undefined)
+                ? Boolean(diagnosticData.present)
+                : Boolean(loggerData && loggerData.card_present);
+            const fsType = (diagnosticData && diagnosticData.fs_type) || (loggerData && loggerData.card_fs_type) || '';
+            const statusReason = (diagnosticData && diagnosticData.status_reason) || (loggerData && loggerData.card_status_reason) || '';
+
+            const ejectBtn = document.getElementById('sd-eject-btn');
+            const mountBtn = document.getElementById('sd-mount-btn');
+            const testBtn = document.getElementById('sd-test-btn');
+            if (ejectBtn) ejectBtn.style.display = isMounted ? 'inline-block' : 'none';
+            if (mountBtn) mountBtn.style.display = (!isMounted && (isEjected || isPresent)) ? 'inline-block' : 'none';
+            if (testBtn) testBtn.disabled = !isMounted;
+
+            if (isEjected) {
+                status.textContent = isPresent ? 'READY TO EJECT (SAFE TO REMOVE)' : 'EJECTED (CARD REMOVED)';
+                status.style.color = '#ffb100';
+                note.textContent = isPresent
+                    ? 'Filesystem unmounted and SD writes paused. Safe to remove the microSD card now, or click "Mount SD Card" to resume logging.'
+                    : 'Card safely ejected and removed. Re-insert a microSD card to automatically remount.';
+            } else if ((loggerData && loggerData.mounted) ||
                 (!loggerData && diagnosticData && diagnosticData.mounted)) {
                 status.textContent = 'MOUNTED';
                 status.style.color = '#00f5a0';
                 note.textContent = 'Card detected and FAT filesystem mounted.';
-            } else if (diagnosticData && diagnosticData.present) {
+            } else if (isUnusable) {
+                status.textContent = fsType ? `UNUSABLE (${fsType})` : 'CARD UNFORMATTED / UNSUPPORTED';
+                status.style.color = '#ff416c';
+                note.textContent = statusReason
+                    ? `${statusReason} Click "Format SD Card" to format as FAT32.`
+                    : 'Card detected, but filesystem is unformatted or unsupported. Click "Format SD Card" to format as FAT32.';
+            } else if (isPresent) {
                 status.textContent = 'CARD PRESENT / FAT NOT MOUNTED';
                 status.style.color = '#ffb100';
-                note.textContent = 'Hardware is detected, but no writable FAT filesystem is mounted.';
-            } else if (diagnosticData && diagnosticData.present === false) {
+                note.textContent = statusReason || 'Hardware is detected, but no writable FAT filesystem is mounted.';
+            } else if ((diagnosticData && diagnosticData.present === false) || (loggerData && loggerData.card_present === false && loggerData.mounted === false)) {
                 status.textContent = 'NOT DETECTED';
                 status.style.color = 'var(--text-muted)';
                 note.textContent = 'No microSD card is inserted in the slot.';
@@ -5207,21 +5532,31 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                     const lastSuccess = document.getElementById('sd-logger-last-success');
                     const error = document.getElementById('sd-logger-error');
                     
-                    const isCardAbsent = diagnosticData ? (diagnosticData.present === false) : (!data.mounted && !data.last_success_timestamp);
+                    const isEjected = Boolean(data.ejected || (diagnosticData && diagnosticData.ejected));
+                    const isUnusable = !isEjected && Boolean((diagnosticData && diagnosticData.unusable) || data.card_unusable);
+                    const isCardAbsent = !isUnusable && (diagnosticData
+                        ? (diagnosticData.present === false)
+                        : (!data.mounted && !data.card_present && !data.last_success_timestamp));
                     const activeError = !isCardAbsent && Boolean(data.last_error) &&
                         Number(data.last_error_timestamp || 0) >= Number(data.last_success_timestamp || 0);
 
                     if (health) {
-                        if (!data.writer_running) {
+                        if (isEjected) {
+                            health.textContent = 'EJECTED (SAFE TO REMOVE)';
+                            health.style.color = '#ffb100';
+                        } else if (!data.writer_running) {
                             health.textContent = 'STOPPED';
                             health.style.color = 'var(--text-muted)';
+                        } else if (isUnusable) {
+                            health.textContent = 'FORMAT REQUIRED (LOGGING PAUSED)';
+                            health.style.color = '#ff416c';
                         } else if (isCardAbsent) {
                             health.textContent = 'IDLE (NO SD CARD)';
                             health.style.color = 'var(--text-muted)';
                         } else if (activeError) {
                             health.textContent = 'WRITE ERROR';
                             health.style.color = '#ff416c';
-                        } else if (!data.mounted && diagnosticData && diagnosticData.present) {
+                        } else if (!data.mounted && ((diagnosticData && diagnosticData.present) || data.card_present)) {
                             health.textContent = 'WAITING FOR FAT';
                             health.style.color = '#ffb100';
                         } else if (!data.mounted) {
@@ -5237,7 +5572,13 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                     }
 
                     if (counts) {
-                        if (isCardAbsent) {
+
+                        if (isEjected) {
+                            counts.textContent = 'SD logging paused — card is ejected and safe to remove. Click "Mount SD Card" or re-insert the card to resume.';
+                        } else if (isUnusable) {
+                            const fsLabel = (diagnosticData && diagnosticData.fs_type) || data.card_fs_type || 'Unformatted';
+                            counts.textContent = `SD logging paused — card is ${fsLabel}. Format as FAT32 to enable logging.`;
+                        } else if (isCardAbsent) {
                             counts.textContent = 'SD logging paused (no card)';
                         } else {
                             counts.textContent = `Weather: ${data.weather_rows_written}/${data.weather_rows_failed} failed | Metadata: ${data.metadata_rows_written}/${data.metadata_rows_failed} failed | Retries: ${data.retry_count} | Queue: ${data.pending_records}`;
@@ -5248,6 +5589,8 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         if (data.last_success_timestamp) {
                             const when = new Date(data.last_success_timestamp * 1000).toLocaleString();
                             lastSuccess.textContent = `Last successful write: ${when}`;
+                        } else if (isUnusable) {
+                            lastSuccess.textContent = 'Last successful write: none (card requires FAT32 formatting)';
                         } else if (isCardAbsent) {
                             lastSuccess.textContent = 'Last successful write: none (no card inserted)';
                         } else {
@@ -5256,7 +5599,14 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                     }
 
                     if (error) {
-                        if (activeError && data.last_error) {
+
+                        if (isUnusable) {
+                            const reason = (diagnosticData && diagnosticData.status_reason) || data.card_status_reason || data.last_error;
+                            error.textContent = reason
+                                ? `Card unusable: ${reason}`
+                                : 'Card cannot be mounted until formatted as FAT32.';
+                            error.style.display = 'block';
+                        } else if (activeError && data.last_error) {
                             const when = data.last_error_timestamp
                                 ? new Date(data.last_error_timestamp * 1000).toLocaleString()
                                 : 'unknown time';
@@ -5298,8 +5648,17 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
         }
 
         function updateSdFileList(diagnosticData = null) {
+            if (diagnosticData && diagnosticData.ejected) {
+                setSdFileMessage('SD card is ejected and safe to remove. Click "Mount SD Card" or re-insert the card to access files.', '#ffb100');
+                return Promise.resolve();
+            }
             if (diagnosticData && diagnosticData.present === false) {
                 setSdFileMessage('No microSD card inserted.');
+                return Promise.resolve();
+            }
+            if (diagnosticData && diagnosticData.unusable) {
+                const fsLabel = diagnosticData.fs_type ? ` (${diagnosticData.fs_type})` : '';
+                setSdFileMessage(`Card is unformatted or unsupported${fsLabel}. Click "Format SD Card" above to initialize as FAT32.`, '#ffb100');
                 return Promise.resolve();
             }
             return fetch('/sd/list')
@@ -5355,7 +5714,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                     });
                 })
                 .catch(err => {
-                    setSdFileMessage('No microSD card inserted.', 'var(--text-muted)');
+                    setSdFileMessage('No mounted FAT32 microSD card available.', 'var(--text-muted)');
                 });
         }
 
@@ -5417,7 +5776,8 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                     return res.json();
                 })
                 .then(data => {
-                    if (data.present === false) {
+                    g_lastSdDiag = data;
+                    if (data.present === false || data.ejected) {
                         diagPanel.style.display = 'none';
                         diagContent.innerHTML = '';
                         diagParts.innerHTML = '';
@@ -5425,7 +5785,11 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                     }
 
                     diagPanel.style.display = 'block';
-                    const isMounted = data.mounted ? '<span style="color: #00f5a0; font-weight: 700;">Mounted</span>' : '<span style="color: #ffb100; font-weight: 700;">Unmounted (Raw Card Mode)</span>';
+                    const isMounted = data.mounted
+                        ? '<span style="color: #00f5a0; font-weight: 700;">Mounted (FAT)</span>'
+                        : (data.unusable
+                            ? `<span style="color: #ff416c; font-weight: 700;">Unusable (${data.fs_type || 'Requires Format'})</span>`
+                            : '<span style="color: #ffb100; font-weight: 700;">Unmounted (Raw Card Mode)</span>');
                     let vfsHtml = '';
                     if (data.vfs_total_gb !== undefined) {
                         vfsHtml = `
@@ -5442,19 +5806,25 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         ${vfsHtml}
                     `;
 
+                    const actionNoticeHtml = data.unusable ? `
+                        <div style="margin-top: 0.75rem; background: rgba(255, 65, 108, 0.1); border: 1px solid rgba(255, 65, 108, 0.35); padding: 0.8rem; border-radius: 8px; color: #ffb100; font-size: 0.8rem; line-height: 1.4;">
+                            <strong style="color: #ff416c;">ACTION REQUIRED:</strong> ${data.status_reason || 'This microSD card does not have a valid FAT16/FAT32 filesystem.'}<br>
+                            Please click <strong>"Format SD Card"</strong> above to initialize this ${(data.capacity_gb || 0).toFixed(0)}GB card as FAT32 so WeatherLogger can record telemetry.
+                        </div>` : '';
+
                     if (data.mbr_error) {
                         diagParts.innerHTML = `
                             <div style="color: #ff416c; font-size: 0.8rem; margin-top: 0.5rem;">
                                 <strong>MBR Probe Warning:</strong> ${data.mbr_error}
-                            </div>`;
+                            </div>${actionNoticeHtml}`;
                     } else if (data.partitions && data.partitions.length > 0) {
                         let html = `<div style="font-weight: 600; margin-bottom: 0.5rem; color: #fff;">Partition Layout (${data.partition_count} partitions found, MBR Sig: ${data.mbr_signature}):</div>`;
                         html += '<div style="display: flex; flex-direction: column; gap: 0.4rem;">';
                         data.partitions.forEach(p => {
                             let typeStyle = 'color: #ffb100; font-weight: bold;';
-                            if (p.type === '0x83') {
+                            if (p.type === '0x83' || p.type === '0x07' || p.type === '0xEE') {
                                 typeStyle = 'color: #ff416c; font-weight: bold; background: rgba(255, 65, 108, 0.1); padding: 0.1rem 0.3rem; border-radius: 4px;';
-                            } else if (p.type === '0x0C' || p.type === '0x0B') {
+                            } else if (p.type === '0x0C' || p.type === '0x0B' || p.type === '0x06' || p.type === '0x04' || p.type === '0x0E') {
                                 typeStyle = 'color: #00f5a0; font-weight: bold;';
                             }
                             html += `
@@ -5464,21 +5834,13 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                                 </div>`;
                         });
                         html += '</div>';
-
-                        const hasExt = data.partitions.some(p => p.type === '0x83');
-                        if (hasExt) {
-                            html += `
-                                <div style="margin-top: 0.75rem; background: rgba(255, 177, 0, 0.08); border: 1px solid rgba(255, 177, 0, 0.2); padding: 0.8rem; border-radius: 8px; color: #ffb100; font-size: 0.8rem; line-height: 1.35;">
-                                    <strong>ACTION REQUIRED:</strong> Linux EXT2/3/4 filesystem is NOT supported directly by ESP32 FATFS. 
-                                    Please click <strong>"Format SD Card"</strong> to clear the MBR partitions and format this ${(data.capacity_gb || 0).toFixed(0)}GB card as FAT32 automatically.
-                                </div>`;
-                        }
+                        html += actionNoticeHtml;
                         diagParts.innerHTML = html;
                     } else {
                         diagParts.innerHTML = `
                             <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0.5rem; background: rgba(255,255,255,0.01); padding: 0.5rem; border-radius: 6px; text-align: center;">
-                                No partition table found or card is completely unpartitioned. Auto-format on format request should run seamlessly.
-                            </div>`;
+                                No MBR partition table found (Sig: ${data.mbr_signature || '0x0000'}) or card is blank/unformatted.
+                            </div>${actionNoticeHtml}`;
                     }
                     return data;
                 })
@@ -5513,27 +5875,73 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                 });
         }
 
-        function showSdFormatModal() {
+        function showSdFormatModal(estSec, capGb) {
             const modal = document.getElementById('sd-format-modal');
             if (!modal) return;
             const spinner = document.getElementById('sd-format-spinner');
             if (spinner) spinner.style.display = 'block';
             const title = document.getElementById('sd-format-modal-title');
-            if (title) title.textContent = 'Formatting SD Card';
+            if (title) title.textContent = (capGb && capGb > 0) ? `Formatting ${(capGb).toFixed(0)}GB SD Card` : 'Formatting SD Card';
+            
+            const totalDurationSec = estSec || 150;
+            const estTimeStr = formatEtaCountdown(totalDurationSec);
             const msg = document.getElementById('sd-format-modal-msg');
-            if (msg) msg.innerHTML = 'Formatting in progress... This takes <strong>~30 seconds</strong>.<br>Please do not turn off or unplug the device.';
+            if (msg) {
+                msg.innerHTML = `Formatting in progress... Estimated time: <strong>~${estTimeStr}</strong>.<br>` +
+                                `Please do not turn off or unplug the device.`;
+            }
+
+            const progressContainer = document.getElementById('sd-format-progress-container');
+            const progressBar = document.getElementById('sd-format-progress-bar');
+            const etaEl = document.getElementById('sd-format-eta');
+            if (progressContainer) progressContainer.style.display = 'block';
+            if (progressBar) {
+                progressBar.style.width = '3%';
+                progressBar.style.background = 'linear-gradient(90deg, #ff416c 0%, #ff4b2b 25%, #00f5a0 50%, #ff416c 75%, #ff4b2b 100%)';
+                progressBar.style.backgroundSize = '200% 100%';
+                progressBar.style.animation = 'progress-shimmer 2s linear infinite';
+            }
+            if (etaEl) {
+                etaEl.style.display = 'block';
+                etaEl.style.color = '#00f5a0';
+                etaEl.textContent = `ETA ~${estTimeStr} remaining (0%)`;
+            }
+
             const statusEl = document.getElementById('sd-format-modal-status');
             if (statusEl) statusEl.style.display = 'none';
+
+            if (g_sdFormatTimer) clearInterval(g_sdFormatTimer);
             modal.style.display = 'flex';
         }
 
         function updateSdFormatModal(success, msg) {
+            if (g_sdFormatTimer) {
+                clearInterval(g_sdFormatTimer);
+                g_sdFormatTimer = null;
+            }
             const spinner = document.getElementById('sd-format-spinner');
             if (spinner) spinner.style.display = 'none';
             const title = document.getElementById('sd-format-modal-title');
             if (title) title.textContent = success ? 'Format Complete' : 'Format Failed';
             const msgEl = document.getElementById('sd-format-modal-msg');
             if (msgEl) msgEl.textContent = msg;
+
+            const progressBar = document.getElementById('sd-format-progress-bar');
+            const etaEl = document.getElementById('sd-format-eta');
+            if (progressBar) {
+                progressBar.style.animation = 'none';
+                if (success) {
+                    progressBar.style.width = '100%';
+                    progressBar.style.background = '#00f5a0';
+                } else {
+                    progressBar.style.background = '#ff416c';
+                }
+            }
+            if (etaEl) {
+                etaEl.textContent = success ? 'Done (100%)' : 'Format Aborted';
+                etaEl.style.color = success ? '#00f5a0' : '#ff416c';
+            }
+
             const statusEl = document.getElementById('sd-format-modal-status');
             if (statusEl) {
                 statusEl.style.display = 'block';
@@ -5545,21 +5953,82 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
         }
 
         function hideSdFormatModal() {
+            if (g_sdFormatTimer) {
+                clearInterval(g_sdFormatTimer);
+                g_sdFormatTimer = null;
+            }
             const modal = document.getElementById('sd-format-modal');
             if (modal) modal.style.display = 'none';
+            const progressContainer = document.getElementById('sd-format-progress-container');
+            const etaEl = document.getElementById('sd-format-eta');
+            const progressBar = document.getElementById('sd-format-progress-bar');
+            if (progressContainer) progressContainer.style.display = 'none';
+            if (etaEl) etaEl.style.display = 'none';
+            if (progressBar) {
+                progressBar.style.width = '0%';
+                progressBar.style.animation = 'progress-shimmer 2s linear infinite';
+                progressBar.style.background = 'linear-gradient(90deg, #ff416c 0%, #ff4b2b 25%, #00f5a0 50%, #ff416c 75%, #ff4b2b 100%)';
+            }
         }
 
         function formatSdCard() {
-            if (!confirm("CRITICAL WARNING: Are you sure you want to format the SD Card?\n\nThis will permanently erase ALL files on the card!\n\nFormatting takes ~30 seconds.")) {
+            const capGb = (g_lastSdDiag && g_lastSdDiag.capacity_gb) ? g_lastSdDiag.capacity_gb : (window.g_sdCapacityGb || 0);
+            // Fast DMA FAT32 format time: ~10-20s for 32-64GB cards
+            const estSec = capGb > 0 ? Math.max(10, Math.round(6 + capGb * 0.22)) : 15;
+            const estTimeStr = formatEtaCountdown(estSec);
+            const sizeNote = capGb > 0 ? ` (${(capGb).toFixed(0)}GB card)` : '';
+
+            if (!confirm(`CRITICAL WARNING: Are you sure you want to format the SD Card${sizeNote}?\n\nThis will permanently erase ALL files on the card!\n\nEstimated time: ~${estTimeStr}.\nPlease do not turn off or unplug the device.`)) {
                 return;
             }
-            showSdFormatModal();
+            showSdFormatModal(estSec, capGb);
+            const startTime = Date.now();
             fetch('/sd/format', { method: 'POST' })
                 .then(res => {
                     if (!res.ok) throw new Error("Format failed");
                     return res.json();
                 })
                 .then(data => {
+                    if (data && data.async) {
+                        const progressBar = document.getElementById('sd-format-progress-bar');
+                        const etaEl = document.getElementById('sd-format-eta');
+                        let pollInFlight = false;
+                        if (g_sdFormatTimer) clearInterval(g_sdFormatTimer);
+                        g_sdFormatTimer = setInterval(() => {
+                            if (pollInFlight) return;
+                            pollInFlight = true;
+                            fetch('/sd/status')
+                                .then(r => r.ok ? r.json() : null)
+                                .then(st => {
+                                    pollInFlight = false;
+                                    if (!st) return;
+                                    const pct = Math.max(3, Math.min(99, st.format_progress || 3));
+                                    const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+                                    if (st.formatting) {
+                                        if (progressBar) progressBar.style.width = `${pct}%`;
+                                        if (etaEl) etaEl.textContent = `Formatting FAT32... ${pct}% (${elapsed}s elapsed)`;
+                                        return;
+                                    }
+                                    clearInterval(g_sdFormatTimer);
+                                    g_sdFormatTimer = null;
+                                    if (st.mounted || (st.format_progress === 100 && !st.card_unusable)) {
+                                        updateSdFormatModal(true, `SD Card formatted and mounted in ${elapsed}s!`);
+                                        setTimeout(() => {
+                                            hideSdFormatModal();
+                                            updateSdCardInfo();
+                                        }, 2000);
+                                    } else {
+                                        updateSdFormatModal(false, st.last_error || st.card_status_reason || "Formatting failed");
+                                        setTimeout(() => {
+                                            hideSdFormatModal();
+                                            updateSdCardInfo();
+                                        }, 4000);
+                                    }
+                                })
+                                .catch(() => { pollInFlight = false; });
+                        }, 400);
+                        return;
+                    }
                     updateSdFormatModal(true, "SD Card formatted successfully!");
                     setTimeout(() => {
                         hideSdFormatModal();
@@ -5602,6 +6071,85 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         btn.textContent = "Test SD Card (W/R)";
                     }
                     updateSdCardInfo();
+                });
+        }
+
+        function ejectSdCard() {
+            const ejectBtn = document.getElementById('sd-eject-btn');
+            const status = document.getElementById('sd-status-val');
+            const note = document.getElementById('sd-refresh-note');
+            if (ejectBtn) {
+                ejectBtn.disabled = true;
+                ejectBtn.textContent = 'Ejecting...';
+            }
+            if (status) {
+                status.textContent = 'EJECTING...';
+                status.style.color = '#ffb100';
+            }
+            if (note) {
+                note.textContent = 'Flushing and unmounting FAT32 filesystem...';
+            }
+            fetch('/sd/eject', { method: 'POST' })
+                .then(async res => {
+                    if (!res.ok) {
+                        const txt = await res.text();
+                        throw new Error(txt || `HTTP ${res.status}`);
+                    }
+                    return res.json();
+                })
+                .then(() => {
+                    updateStats();
+                    return updateSdCardInfo();
+                })
+                .catch(err => {
+                    alert('Failed to eject SD card: ' + err.message);
+                })
+                .finally(() => {
+                    if (ejectBtn) {
+                        ejectBtn.disabled = false;
+                        ejectBtn.textContent = 'Eject SD Card';
+                    }
+                });
+        }
+
+        function mountSdCard() {
+            const mountBtn = document.getElementById('sd-mount-btn');
+            const status = document.getElementById('sd-status-val');
+            const note = document.getElementById('sd-refresh-note');
+            if (mountBtn) {
+                mountBtn.disabled = true;
+                mountBtn.textContent = 'Mounting...';
+            }
+            if (status) {
+                status.textContent = 'MOUNTING...';
+                status.style.color = '#00d2ff';
+            }
+            if (note) {
+                note.textContent = 'Probing SPI bus and mounting FAT32 filesystem...';
+            }
+            fetch('/sd/mount', { method: 'POST' })
+                .then(async res => {
+                    if (!res.ok) {
+                        const txt = await res.text();
+                        throw new Error(txt || `HTTP ${res.status}`);
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    if (data && data.mounted === false) {
+                        alert(data.message || 'Could not mount SD card. Make sure a FAT32 microSD card is inserted.');
+                    }
+                    updateStats();
+                    return updateSdCardInfo();
+                })
+                .catch(err => {
+                    alert('Failed to mount SD card: ' + err.message);
+                })
+                .finally(() => {
+                    if (mountBtn) {
+                        mountBtn.disabled = false;
+                        mountBtn.textContent = 'Mount SD Card';
+                    }
                 });
         }
 
@@ -6862,177 +7410,845 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
         }
 
         let historyCharts = {};
+        let historyTimeRange = null;
+        let isSyncingHistoryZoom = false;
+        const histSync = (typeof uPlot !== 'undefined' && uPlot.sync) ? uPlot.sync("histWeather") : { key: "histWeather" };
+
+        function degToCardinal(deg) {
+            if (deg == null || isNaN(deg)) return "--";
+            const dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+            const norm = ((deg % 360) + 360) % 360;
+            return dirs[Math.round(norm / 22.5) % 16];
+        }
+
+        function calcDewPointC(tempC, rh) {
+            if (tempC == null || rh == null || isNaN(tempC) || isNaN(rh) || rh <= 0) return null;
+            const a = 17.625, b = 243.04;
+            const c = Math.log(Math.max(1, rh) / 100.0) + (a * tempC) / (b + tempC);
+            return parseFloat(((b * c) / (a - c)).toFixed(1));
+        }
+
+        function calcFeelsLikeC(tempC, windMs, rh) {
+            if (tempC == null || isNaN(tempC)) return null;
+            if (tempC <= 10.0 && windMs != null && !isNaN(windMs)) {
+                const vKmh = windMs * 3.6;
+                if (vKmh > 4.8) {
+                    const vPow = Math.pow(vKmh, 0.16);
+                    return parseFloat((13.12 + 0.6215 * tempC - 11.37 * vPow + 0.3965 * tempC * vPow).toFixed(1));
+                }
+                return parseFloat(tempC.toFixed(1));
+            }
+            if (tempC > 26.7 && rh != null && !isNaN(rh)) {
+                const hi = -8.78469475556 + 1.61139411 * tempC + 2.33854883889 * rh
+                    - 0.14611605 * tempC * rh - 0.012308094 * tempC * tempC - 0.0164248277778 * rh * rh
+                    + 0.002211732 * tempC * tempC * rh + 0.00072546 * tempC * rh * rh - 0.000003582 * tempC * tempC * rh * rh;
+                return parseFloat(hi.toFixed(1));
+            }
+            return parseFloat(tempC.toFixed(1));
+        }
+
+        function calcSeriesStats(arr, decimals = 1) {
+            if (!arr || !arr.length) return null;
+            let min = Infinity, max = -Infinity, sum = 0, count = 0, first = null, last = null;
+            for (let i = 0; i < arr.length; i++) {
+                const v = arr[i];
+                if (v != null && !isNaN(v)) {
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                    sum += v;
+                    count++;
+                    if (first === null) first = v;
+                    last = v;
+                }
+            }
+            if (!count) return null;
+            return {
+                min: min.toFixed(decimals),
+                max: max.toFixed(decimals),
+                avg: (sum / count).toFixed(decimals),
+                first: first,
+                last: last,
+                count: count
+            };
+        }
+
+        function calcCircularWindMean(dirs, speeds) {
+            if (!dirs || !dirs.length) return null;
+            let sinSum = 0, cosSum = 0, count = 0;
+            for (let i = 0; i < dirs.length; i++) {
+                const d = dirs[i];
+                if (d == null || isNaN(d)) continue;
+                const spd = (speeds && speeds[i] != null && !isNaN(speeds[i])) ? Math.max(0.15, speeds[i]) : 1.0;
+                const rad = (d * Math.PI) / 180.0;
+                sinSum += Math.sin(rad) * spd;
+                cosSum += Math.cos(rad) * spd;
+                count++;
+            }
+            if (!count || (Math.abs(sinSum) < 1e-6 && Math.abs(cosSum) < 1e-6)) return null;
+            const deg = Math.round(((Math.atan2(sinSum, cosSum) * 180.0) / Math.PI + 360.0) % 360.0);
+            return { deg: deg, cardinal: degToCardinal(deg) };
+        }
+
+        function formatHistLegendTime(u, ts) {
+            if (ts == null || isNaN(ts)) return "--/-- --:--";
+            const d = new Date(ts * 1000);
+            const mo = String(d.getMonth() + 1).padStart(2, '0');
+            const da = String(d.getDate()).padStart(2, '0');
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            return `${mo}/${da} ${hh}:${mm}`;
+        }
+
+        function syncHistoryScaleX(sourcePlot, min, max) {
+            if (isSyncingHistoryZoom) return;
+            isSyncingHistoryZoom = true;
+            try {
+                Object.values(historyCharts).forEach(plot => {
+                    if (plot && plot !== sourcePlot) {
+                        plot.setScale('x', { min: min, max: max });
+                    }
+                });
+            } finally {
+                isSyncingHistoryZoom = false;
+            }
+        }
+
+        function resetHistoryZoom() {
+            if (!historyTimeRange) return;
+            isSyncingHistoryZoom = true;
+            try {
+                Object.values(historyCharts).forEach(plot => {
+                    if (plot) {
+                        plot.setScale('x', { min: historyTimeRange[0], max: historyTimeRange[1] });
+                    }
+                });
+            } finally {
+                isSyncingHistoryZoom = false;
+            }
+        }
+
+        function drawWindDirectionRibbon(u) {
+            const ctx = u.ctx;
+            const { left, top, width, height } = u.bbox;
+            if (width <= 40 || height <= 60) return;
+
+            const pxRatio = (typeof uPlot !== 'undefined' && uPlot.pxRatio) ? uPlot.pxRatio : (window.devicePixelRatio || 1);
+            const bandH = Math.round(34 * pxRatio);
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(left, top, width, bandH + 2 * pxRatio);
+            ctx.clip();
+
+            // Subtle ribbon backdrop & bottom divider
+            ctx.fillStyle = "rgba(168, 85, 247, 0.08)";
+            ctx.fillRect(left, top, width, bandH);
+            ctx.strokeStyle = "rgba(168, 85, 247, 0.24)";
+            ctx.lineWidth = Math.max(1, 0.8 * pxRatio);
+            ctx.beginPath();
+            ctx.moveTo(left, top + bandH);
+            ctx.lineTo(left + width, top + bandH);
+            ctx.stroke();
+
+            const times = u.data[0];
+            const speeds = u.data[1];
+            const dirs = u.data[3];
+            if (!times || !times.length || !dirs) {
+                ctx.restore();
+                return;
+            }
+
+            const xMin = u.scales.x.min != null ? u.scales.x.min : times[0];
+            const xMax = u.scales.x.max != null ? u.scales.x.max : times[times.length - 1];
+            const spanSec = Math.max(300, xMax - xMin);
+
+            // Choose bucket interval (default 1 hour = 3600s for 24h view; adapts on zoom or narrow screens)
+            const cssWidth = width / pxRatio;
+            const maxSlots = Math.max(4, Math.floor((cssWidth - 36) / 30));
+            const candidateSteps = [900, 1800, 3600, 7200, 10800, 14400];
+            let stepSec = 3600;
+            for (let s of candidateSteps) {
+                if (spanSec / s <= maxSlots) {
+                    stepSec = s;
+                    break;
+                }
+                stepSec = s;
+            }
+
+            // Small badge on far left of ribbon indicating bucket window
+            const stepLabel = stepSec >= 3600 ? `${stepSec / 3600}H` : `${stepSec / 60}M`;
+            ctx.font = `700 ${Math.round(8.5 * pxRatio)}px -apple-system, BlinkMacSystemFont, sans-serif`;
+            ctx.fillStyle = "rgba(216, 180, 254, 0.72)";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            ctx.fillText(stepLabel, left + 5 * pxRatio, top + bandH * 0.5);
+
+            const firstBucket = Math.floor(xMin / stepSec) * stepSec;
+            let lastDrawnX = left + 26 * pxRatio;
+            const minGapPx = 26 * pxRatio;
+
+            for (let bStart = firstBucket; bStart <= xMax; bStart += stepSec) {
+                const bEnd = bStart + stepSec;
+                let sinSum = 0, cosSum = 0, spdSum = 0, tSum = 0, cnt = 0;
+                for (let i = 0; i < times.length; i++) {
+                    const t = times[i];
+                    if (t < bStart || t >= bEnd || t < xMin || t > xMax) continue;
+                    const d = dirs[i];
+                    if (d == null || isNaN(d)) continue;
+                    const s = (speeds && speeds[i] != null && !isNaN(speeds[i])) ? speeds[i] : 0.5;
+                    const w = Math.max(0.15, s);
+                    const rad = (d * Math.PI) / 180.0;
+                    sinSum += Math.sin(rad) * w;
+                    cosSum += Math.cos(rad) * w;
+                    spdSum += s;
+                    tSum += t;
+                    cnt++;
+                }
+                if (!cnt) continue;
+
+                const centerT = tSum / cnt;
+                const cx = u.valToPos(centerT, 'x', true);
+                if (cx < lastDrawnX || cx > left + width - 14 * pxRatio) continue;
+                lastDrawnX = cx + minGapPx;
+
+                const avgDeg = ((Math.atan2(sinSum, cosSum) * 180.0) / Math.PI + 360.0) % 360.0;
+                const avgSpd = spdSum / cnt;
+                const cardinal = degToCardinal(avgDeg);
+
+                // Meteorological wind direction avgDeg is where wind blows FROM.
+                // Flow vector points TOWARD (avgDeg + 180) deg on compass (0=N/Up, 90=E/Right).
+                const flowCompass = (avgDeg + 180.0) % 360.0;
+                const angleRad = ((flowCompass - 90.0) * Math.PI) / 180.0;
+
+                const arrowCy = top + 11 * pxRatio;
+                const arrowLen = 6.2 * pxRatio;
+                const headLen = 4.2 * pxRatio;
+
+                ctx.save();
+                ctx.translate(cx, arrowCy);
+                ctx.rotate(angleRad);
+
+                const alpha = avgSpd < 0.2 ? 0.55 : Math.min(1.0, 0.72 + (avgSpd / 12.0) * 0.28);
+                ctx.strokeStyle = `rgba(216, 180, 254, ${alpha.toFixed(2)})`;
+                ctx.fillStyle = `rgba(216, 180, 254, ${alpha.toFixed(2)})`;
+                ctx.lineWidth = 1.65 * pxRatio;
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+
+                // Arrow shaft
+                ctx.beginPath();
+                ctx.moveTo(-arrowLen * 0.75, 0);
+                ctx.lineTo(arrowLen * 0.75, 0);
+                ctx.stroke();
+
+                // Arrowhead at +X tip
+                ctx.beginPath();
+                ctx.moveTo(arrowLen * 0.85, 0);
+                ctx.lineTo(arrowLen * 0.85 - headLen, -headLen * 0.68);
+                ctx.lineTo(arrowLen * 0.85 - headLen, headLen * 0.68);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+
+                // Cardinal label below arrow
+                ctx.font = `700 ${Math.round(9 * pxRatio)}px -apple-system, BlinkMacSystemFont, sans-serif`;
+                ctx.fillStyle = avgSpd >= 3.0 ? "#f3e8ff" : "#d8b4fe";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(cardinal, cx, top + 25.5 * pxRatio);
+            }
+
+            ctx.restore();
+        }
+
+        window.g_units = window.g_units || {
+            temp_id: 0,
+            wind_id: 0,
+            precip_id: 0,
+            press_id: 0,
+            temp: 'C',
+            wind: 'm/s',
+            precip: 'mm',
+            press: 'hPa'
+        };
+
+        function msToBft(ms) {
+            if (ms == null || isNaN(ms)) return null;
+            if (ms < 0.5) return 0;
+            if (ms < 1.6) return 1;
+            if (ms < 3.4) return 2;
+            if (ms < 5.5) return 3;
+            if (ms < 8.0) return 4;
+            if (ms < 10.8) return 5;
+            if (ms < 13.9) return 6;
+            if (ms < 17.2) return 7;
+            if (ms < 20.8) return 8;
+            if (ms < 24.5) return 9;
+            if (ms < 28.5) return 10;
+            if (ms < 32.7) return 11;
+            return 12;
+        }
+
+        function convertTempFromC(valC) {
+            if (valC == null || isNaN(valC)) return null;
+            const u = window.g_units || {};
+            if (u.temp_id === 1 || u.temp === 'F') {
+                return valC * 1.8 + 32.0;
+            }
+            return valC;
+        }
+
+        function convertWindFromMs(valMs) {
+            if (valMs == null || isNaN(valMs)) return null;
+            const u = window.g_units || {};
+            switch (Number(u.wind_id)) {
+                case 1: return valMs * 3.6;        // km/h
+                case 2: return valMs * 2.236936;   // mph
+                case 3: return valMs * 3.28084;    // ft/s
+                case 4: return msToBft(valMs);     // bft
+                case 5: return valMs * 1.943844;   // kn
+                case 0:
+                default: return valMs;             // m/s
+            }
+        }
+
+        function convertPrecipFromMm(valMm) {
+            if (valMm == null || isNaN(valMm)) return null;
+            const u = window.g_units || {};
+            if (u.precip_id === 1 || u.precip === 'in') {
+                return valMm * 0.03937008;
+            }
+            return valMm;
+        }
+
+        function convertPressFromHpa(valHpa) {
+            if (valHpa == null || isNaN(valHpa)) return null;
+            const u = window.g_units || {};
+            switch (Number(u.press_id)) {
+                case 1: return valHpa * 0.7500616;  // mmHg
+                case 2: return valHpa * 0.02952998; // inHg
+                case 0:
+                default: return valHpa;             // hPa
+            }
+        }
+
+        function convertArr(arr, fn, decimals = 2) {
+            if (!Array.isArray(arr)) return arr;
+            const factor = Math.pow(10, decimals);
+            return arr.map(v => {
+                if (v == null || isNaN(v)) return null;
+                const conv = fn(v);
+                return conv == null ? null : Math.round(conv * factor) / factor;
+            });
+        }
+
+        function setDisplayUnits() {
+            const tempEl = document.getElementById('unit-temp-select');
+            const windEl = document.getElementById('unit-wind-select');
+            const precipEl = document.getElementById('unit-precip-select');
+            const pressEl = document.getElementById('unit-press-select');
+            const statusEl = document.getElementById('unit-sync-status');
+
+            const params = new URLSearchParams();
+            if (tempEl) params.set('temp', tempEl.value);
+            if (windEl) params.set('wind', windEl.value);
+            if (precipEl) params.set('precip', precipEl.value);
+            if (pressEl) params.set('press', pressEl.value);
+
+            if (statusEl) {
+                statusEl.textContent = 'Syncing with LCD...';
+                statusEl.style.color = 'var(--accent-blue)';
+            }
+
+            fetch('/set_units?' + params.toString(), { method: 'POST' })
+                .then(res => res.json())
+                .then(resp => {
+                    if (resp && resp.status === 'ok') {
+                        window.g_units = {
+                            temp_id: resp.temp_id,
+                            wind_id: resp.wind_id,
+                            precip_id: resp.precip_id,
+                            press_id: resp.press_id,
+                            temp: resp.temp,
+                            wind: resp.wind,
+                            precip: resp.precip,
+                            press: resp.press
+                        };
+                        window.g_unitsSignature = `${resp.temp_id}:${resp.wind_id}:${resp.precip_id}:${resp.press_id}`;
+                        if (statusEl) {
+                            statusEl.textContent = `Synced (°${resp.temp}, ${resp.wind}, ${resp.precip}, ${resp.press})`;
+                            statusEl.style.color = 'var(--accent-green)';
+                        }
+                        updateStats();
+                        if (window.g_lastLiveTrendsData) {
+                            renderLiveChartData(window.g_lastLiveTrendsData, true);
+                        } else {
+                            updateLiveChart();
+                        }
+                        if (window.g_lastHistoryData && document.getElementById('page-history').style.display === 'block') {
+                            renderHistoryChartsData(window.g_lastHistoryData);
+                        }
+                    } else if (statusEl) {
+                        statusEl.textContent = 'Sync failed';
+                        statusEl.style.color = 'var(--accent-red)';
+                    }
+                })
+                .catch(() => {
+                    if (statusEl) {
+                        statusEl.textContent = 'Connection error';
+                        statusEl.style.color = 'var(--accent-red)';
+                    }
+                });
+        }
+
         function initHistoryCharts() {
             fetch('/history')
                 .then(res => res.json())
                 .then(historyData => {
-                    if (!historyData.time || historyData.time.length === 0) {
-                        document.getElementById('history-container').innerHTML = `
-                            <div style="text-align: center; color: var(--text-muted); padding: 3rem;">
-                                No historical data aggregated yet. Wait for a 5-minute interval boundary...
-                            </div>`;
-                        return;
-                    }
-
-                    const container = document.getElementById('history-container');
-                    container.innerHTML = `
-                        <div class="grid-charts">
-                            <div class="card" style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 1.25rem; backdrop-filter: var(--glass-blur);">
-                                <h3 style="margin-top: 0; font-size: 1rem; margin-bottom: 1rem;">Temperature & Humidity</h3>
-                                <div id="chart-hist-temp" style="width: 100%;"></div>
-                            </div>
-                            <div class="card" style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 1.25rem; backdrop-filter: var(--glass-blur);">
-                                <h3 style="margin-top: 0; font-size: 1rem; margin-bottom: 1rem;">Wind Trends</h3>
-                                <div id="chart-hist-wind" style="width: 100%;"></div>
-                            </div>
-                            <div class="card" style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 1.25rem; backdrop-filter: var(--glass-blur);">
-                                <h3 style="margin-top: 0; font-size: 1rem; margin-bottom: 1rem;">Atmospheric & Solar</h3>
-                                <div id="chart-hist-env" style="width: 100%;"></div>
-                            </div>
-                            <div class="card" style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 1.25rem; backdrop-filter: var(--glass-blur);">
-                                <h3 style="margin-top: 0; font-size: 1rem; margin-bottom: 1rem;">Precipitation (Rate & Cumulative)</h3>
-                                <div id="chart-hist-precip" style="width: 100%;"></div>
-                            </div>
-                        </div>`;
-
-                    const cols = window.innerWidth < 850 ? 1 : 2;
-                    const cardWidth = Math.floor((container.clientWidth - (cols > 1 ? 16 : 0)) / cols) - 40;
-                    const width = Math.max(280, cardWidth);
-
-                    // 1. Temp / Hum Chart
-                    const dataTemp = [historyData.time, historyData.temp, historyData.hum];
-                    const optsTemp = {
-                        width: width,
-                        height: 250,
-                        scales: {
-                            y: {
-                                range: (u, dataMin, dataMax) => {
-                                    if (dataMin == null || dataMax == null) return [0, 30];
-                                    let pad = Math.max(2, (dataMax - dataMin) * 0.15);
-                                    return [Math.floor(dataMin - pad), Math.ceil(dataMax + pad)];
-                                }
-                            },
-                            y2: { range: [0, 100] }
-                        },
-                        axes: [
-                            { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.03)" } },
-                            { label: "Temp °C", stroke: "#ff3b30", grid: { stroke: "rgba(255,255,255,0.03)" } },
-                            { scale: "y2", label: "Hum %", stroke: "#34c759", side: 1, grid: { show: false } }
-                        ],
-                        series: [
-                            {},
-                            { label: "Temp °C", stroke: "#ff3b30", width: 2, points: { show: false } },
-                            { scale: "y2", label: "Hum %", stroke: "#34c759", width: 2, points: { show: false } }
-                        ]
-                    };
-                    historyCharts.temp = new uPlot(optsTemp, dataTemp, document.getElementById('chart-hist-temp'));
-
-                    // 2. Wind / Gust / Direction Chart
-                    const dataWind = [historyData.time, historyData.wind, historyData.gust, historyData.wind_dir];
-                    const optsWind = {
-                        width: width,
-                        height: 250,
-                        scales: {
-                            y: { range: (u, dataMin, dataMax) => [0, Math.max(10, Math.ceil((dataMax || 0) * 1.15))] },
-                            y2: { range: [0, 360] }
-                        },
-                        axes: [
-                            { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.03)" } },
-                            { label: "Wind m/s", stroke: "#00e5ff", grid: { stroke: "rgba(255,255,255,0.03)" } },
-                            { scale: "y2", label: "Dir °", stroke: "#a855f7", side: 1, grid: { show: false } }
-                        ],
-                        series: [
-                            {},
-                            { label: "Wind speed", stroke: "#00e5ff", width: 2, points: { show: false } },
-                            { label: "Wind gust", stroke: "#ffd600", width: 1.5, points: { show: false } },
-                            { scale: "y2", label: "Prevailing Dir °", stroke: "#a855f7", width: 0, points: { show: true, size: 4, fill: "#a855f7" }, paths: () => null }
-                        ]
-                    };
-                    historyCharts.wind = new uPlot(optsWind, dataWind, document.getElementById('chart-hist-wind'));
-
-                    // 3. Pressure / Solar Chart
-                    const dataEnv = [historyData.time, historyData.press, historyData.solar];
-                    const optsEnv = {
-                        width: width,
-                        height: 250,
-                        scales: {
-                            y: {
-                                range: (u, dataMin, dataMax) => {
-                                    if (dataMin == null || dataMax == null) return [980, 1040];
-                                    let pad = Math.max(5, (dataMax - dataMin) * 0.25);
-                                    return [Math.floor(dataMin - pad), Math.ceil(dataMax + pad)];
-                                }
-                            },
-                            y2: {
-                                range: (u, dataMin, dataMax) => [0, Math.max(200, Math.ceil((dataMax || 0) * 1.1))]
-                            }
-                        },
-                        axes: [
-                            { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.03)" } },
-                            { label: "Pressure hPa", stroke: "#af52de", grid: { stroke: "rgba(255,255,255,0.03)" } },
-                            { scale: "y2", label: "Solar W/m²", stroke: "#ff9100", side: 1, grid: { show: false } }
-                        ],
-                        series: [
-                            {},
-                            { label: "Pressure", stroke: "#af52de", width: 2, points: { show: false } },
-                            { scale: "y2", label: "Solar", stroke: "#ff9100", width: 2, points: { show: false } }
-                        ]
-                    };
-                    historyCharts.env = new uPlot(optsEnv, dataEnv, document.getElementById('chart-hist-env'));
-
-                    // 4. Precipitation (Rate & Cumulative) Chart
-                    let runningCml = 0;
-                    const historyPrecipCml = [];
-                    for (let i = 0; i < historyData.time.length; i++) {
-                        let delta = (historyData.precip_accum && historyData.precip_accum[i] != null) ? historyData.precip_accum[i] : null;
-                        if (delta == null && historyData.precip && historyData.precip[i] != null) {
-                            delta = historyData.precip[i] * (5 / 60);
-                        }
-                        if (delta != null && !isNaN(delta)) {
-                            runningCml += Math.max(0, delta);
-                        }
-                        historyPrecipCml.push(parseFloat(runningCml.toFixed(2)));
-                    }
-
-                    const dataPrecip = [historyData.time, historyData.precip, historyPrecipCml];
-                    const optsPrecip = {
-                        width: width,
-                        height: 250,
-                        scales: {
-                            y: {
-                                range: (u, dataMin, dataMax) => [0, Math.max(5, Math.ceil((dataMax || 0) * 1.25))]
-                            },
-                            y2: {
-                                range: (u, dataMin, dataMax) => [0, Math.max(2, Math.ceil((dataMax || 0) * 1.2))]
-                            }
-                        },
-                        axes: [
-                            { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.03)" } },
-                            { label: "Rate mm/h", stroke: "#0088ff", grid: { stroke: "rgba(255,255,255,0.03)" } },
-                            { scale: "y2", label: "24h Rain mm", stroke: "#00d2ff", side: 1, grid: { show: false } }
-                        ],
-                        series: [
-                            {},
-                            { label: "Rate mm/h", stroke: "#0088ff", width: 2, points: { show: false } },
-                            { scale: "y2", label: "24h Rain mm", stroke: "#00d2ff", width: 2, points: { show: false } }
-                        ]
-                    };
-                    historyCharts.precip = new uPlot(optsPrecip, dataPrecip, document.getElementById('chart-hist-precip'));
-
-                    resizeHistoryCharts();
+                    window.g_lastHistoryData = historyData;
+                    renderHistoryChartsData(historyData);
                 });
+        }
+
+        function renderHistoryChartsData(historyData) {
+            Object.values(historyCharts).forEach(c => {
+                if (c && typeof c.destroy === 'function') c.destroy();
+            });
+            historyCharts = {};
+
+            if (!historyData || !historyData.time || historyData.time.length === 0) {
+                document.getElementById('history-container').innerHTML = `
+                    <div style="text-align: center; color: var(--text-muted); padding: 3rem;">
+                        No historical data aggregated yet. Wait for a 5-minute interval boundary...
+                    </div>`;
+                return;
+            }
+
+            const n = historyData.time.length;
+            historyTimeRange = [historyData.time[0], historyData.time[n - 1]];
+
+            const u = window.g_units || {};
+            const uTemp = u.temp || 'C';
+            const uWind = u.wind || 'm/s';
+            const uPrecip = u.precip || 'mm';
+            const uPress = u.press || 'hPa';
+            const windDec = (uWind === 'bft') ? 0 : 1;
+            const pressDec = (uPress === 'inHg') ? 2 : 1;
+            const precipRateDec = (uPrecip === 'in') ? 2 : 1;
+            const precipCmlDec = (uPrecip === 'in') ? 2 : 2;
+
+            // Compute derived series in SI first, then convert all series to active units
+            const feelsLikeArrC = [];
+            const dewPointArrC = [];
+            const historyPrecipCmlMm = [];
+            let runningCmlMm = 0;
+            let wetIntervals = 0;
+
+            for (let i = 0; i < n; i++) {
+                const t = historyData.temp ? historyData.temp[i] : null;
+                const rh = historyData.hum ? historyData.hum[i] : null;
+                const w = historyData.wind ? historyData.wind[i] : null;
+
+                feelsLikeArrC.push(calcFeelsLikeC(t, w, rh));
+                dewPointArrC.push(calcDewPointC(t, rh));
+
+                let delta = (historyData.precip_accum && historyData.precip_accum[i] != null) ? historyData.precip_accum[i] : null;
+                if (delta == null && historyData.precip && historyData.precip[i] != null) {
+                    delta = historyData.precip[i] * (5 / 60);
+                }
+                if (delta != null && !isNaN(delta) && delta > 0) {
+                    runningCmlMm += delta;
+                    wetIntervals++;
+                } else if (historyData.precip && historyData.precip[i] > 0) {
+                    wetIntervals++;
+                }
+                historyPrecipCmlMm.push(parseFloat(runningCmlMm.toFixed(3)));
+            }
+
+            const tempArr = convertArr(historyData.temp, convertTempFromC, 1);
+            const feelsLikeArr = convertArr(feelsLikeArrC, convertTempFromC, 1);
+            const dewPointArr = convertArr(dewPointArrC, convertTempFromC, 1);
+            const windArr = convertArr(historyData.wind, convertWindFromMs, windDec);
+            const gustArr = convertArr(historyData.gust, convertWindFromMs, windDec);
+            const pressArr = convertArr(historyData.press, convertPressFromHpa, pressDec);
+            const precipRateArr = convertArr(historyData.precip, convertPrecipFromMm, precipRateDec);
+            const historyPrecipCml = convertArr(historyPrecipCmlMm, convertPrecipFromMm, precipCmlDec);
+
+            // Compute Min / Avg / Max summary stats for every chart card in active units
+            const stTemp = calcSeriesStats(tempArr, 1);
+            const stFeels = calcSeriesStats(feelsLikeArr, 1);
+            const stHum = calcSeriesStats(historyData.hum, 0);
+
+            const stWind = calcSeriesStats(windArr, windDec);
+            const stGust = calcSeriesStats(gustArr, windDec);
+            const stDir = calcCircularWindMean(historyData.wind_dir, historyData.wind);
+
+            const stPress = calcSeriesStats(pressArr, pressDec);
+            const stSolar = calcSeriesStats(historyData.solar, 0);
+            const stDew = calcSeriesStats(dewPointArr, 1);
+
+            // 3-hour barometric trend (last 36 five-minute intervals)
+            let pressTrendStr = "";
+            if (pressArr && n >= 6) {
+                const lookback = Math.max(0, n - 36);
+                const pNow = pressArr[n - 1];
+                let pPrev = null;
+                for (let k = lookback; k < n - 1; k++) {
+                    if (pressArr[k] != null && !isNaN(pressArr[k])) {
+                        pPrev = pressArr[k];
+                        break;
+                    }
+                }
+                if (pNow != null && pPrev != null) {
+                    const dp = pNow - pPrev;
+                    const thresh = (uPress === 'inHg') ? 0.015 : (uPress === 'mmHg' ? 0.38 : 0.5);
+                    const arrow = dp > thresh ? "↗" : (dp < -thresh ? "↘" : "→");
+                    pressTrendStr = ` · ${arrow} ${dp >= 0 ? '+' : ''}${dp.toFixed(pressDec)}`;
+                }
+            }
+
+            const stRate = calcSeriesStats(precipRateArr, precipRateDec);
+            const totalRainVal = convertPrecipFromMm(runningCmlMm);
+            const totalRain = (totalRainVal != null ? totalRainVal : 0).toFixed(precipCmlDec);
+            const wetMinutes = wetIntervals * 5;
+            const wetTimeStr = wetMinutes >= 60 ? `${Math.floor(wetMinutes / 60)}h ${wetMinutes % 60}m` : `${wetMinutes}m`;
+
+            const pill = (color, label, text) =>
+                `<span class="hist-stat-pill"><span class="dot" style="background:${color};"></span>${label}: <strong>${text}</strong></span>`;
+
+            const tempBadges = [
+                stTemp ? pill("#ff3b30", "Temp", `${stTemp.min}° / ${stTemp.avg}° / ${stTemp.max}°${uTemp}`) : "",
+                stFeels ? pill("#ff9f0a", "Feels", `${stFeels.min}°–${stFeels.max}°${uTemp}`) : "",
+                stHum ? pill("#34c759", "Hum", `${stHum.min}% / ${stHum.avg}% / ${stHum.max}%`) : ""
+            ].join("");
+
+            const windArrowDeg = stDir ? ((stDir.deg + 180) % 360) : 0;
+            const windBadges = [
+                stWind ? pill("#00e5ff", "Avg / Max", `${stWind.avg} / ${stWind.max} ${uWind}`) : "",
+                stGust ? pill("#ffd600", "Peak Gust", `${stGust.max} ${uWind}`) : "",
+                stDir ? pill("#c084fc", "Prevailing", `<span style="display:inline-block;transform:rotate(${windArrowDeg}deg);font-weight:700;">↑</span> ${stDir.cardinal} (${stDir.deg}°)`) : ""
+            ].join("");
+
+            const envBadges = [
+                stPress ? pill("#af52de", "Press", `${stPress.min}–${stPress.max} ${uPress}${pressTrendStr}`) : "",
+                stSolar ? pill("#ff9100", "Solar Peak / Avg", `${stSolar.max} / ${stSolar.avg} W/m²`) : "",
+                stDew ? pill("#38bdf8", "Dew Pt", `${stDew.min}° / ${stDew.avg}° / ${stDew.max}°${uTemp}`) : ""
+            ].join("");
+
+            const precipBadges = [
+                pill("#00d2ff", "24h Total", `${totalRain} ${uPrecip}`),
+                stRate ? pill("#0088ff", "Peak Rate", `${stRate.max} ${uPrecip}/h`) : "",
+                pill("#64748b", "Wet Time", wetTimeStr)
+            ].join("");
+
+            const container = document.getElementById('history-container');
+            container.innerHTML = `
+                <div class="grid-charts">
+                    <div class="card" style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 1.15rem; backdrop-filter: var(--glass-blur);">
+                        <div class="hist-card-header">
+                            <div class="hist-card-title-row">
+                                <h3>Temperature, Feels Like &amp; Humidity</h3>
+                            </div>
+                            <div class="hist-stats-strip">${tempBadges}</div>
+                        </div>
+                        <div id="chart-hist-temp" style="width: 100%;"></div>
+                    </div>
+                    <div class="card" style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 1.15rem; backdrop-filter: var(--glass-blur);">
+                        <div class="hist-card-header">
+                            <div class="hist-card-title-row">
+                                <h3>Wind Trends &amp; Hourly Prevailing Direction</h3>
+                            </div>
+                            <div class="hist-stats-strip">${windBadges}</div>
+                        </div>
+                        <div id="chart-hist-wind" style="width: 100%;"></div>
+                    </div>
+                    <div class="card" style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 1.15rem; backdrop-filter: var(--glass-blur);">
+                        <div class="hist-card-header">
+                            <div class="hist-card-title-row">
+                                <h3>Atmospheric, Solar &amp; Dew Point</h3>
+                            </div>
+                            <div class="hist-stats-strip">${envBadges}</div>
+                        </div>
+                        <div id="chart-hist-env" style="width: 100%;"></div>
+                    </div>
+                    <div class="card" style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 1.15rem; backdrop-filter: var(--glass-blur);">
+                        <div class="hist-card-header">
+                            <div class="hist-card-title-row">
+                                <h3>Precipitation (Rate &amp; Cumulative)</h3>
+                            </div>
+                            <div class="hist-stats-strip">${precipBadges}</div>
+                        </div>
+                        <div id="chart-hist-precip" style="width: 100%;"></div>
+                    </div>
+                </div>`;
+
+            const cols = window.innerWidth < 850 ? 1 : 2;
+            const cardWidth = Math.floor((container.clientWidth - (cols > 1 ? 16 : 0)) / cols) - 38;
+            const width = Math.max(280, cardWidth);
+
+            const sharedCursor = {
+                sync: { key: histSync.key, setSeries: false },
+                drag: { x: true, y: false },
+                points: { size: 5.5, width: 1.5 }
+            };
+
+            const sharedHooks = {
+                setScale: [
+                    (u, key) => {
+                        if (key === 'x') {
+                            syncHistoryScaleX(u, u.scales.x.min, u.scales.x.max);
+                        }
+                    }
+                ]
+            };
+
+            const timeSeriesCfg = {
+                label: "Time",
+                value: formatHistLegendTime
+            };
+
+            // 1. Temp / Feels Like / Hum Chart
+            const dataTemp = [historyData.time, tempArr, feelsLikeArr, historyData.hum];
+            const optsTemp = {
+                width: width,
+                height: 245,
+                cursor: sharedCursor,
+                hooks: sharedHooks,
+                scales: {
+                    y: {
+                        range: (u, dataMin, dataMax) => {
+                            if (dataMin == null || dataMax == null) return uTemp === 'F' ? [32, 86] : [0, 30];
+                            let pad = Math.max(1.5, (dataMax - dataMin) * 0.16);
+                            return [Math.floor(dataMin - pad), Math.ceil(dataMax + pad)];
+                        }
+                    },
+                    y2: { range: [0, 100] }
+                },
+                axes: [
+                    { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { label: `Temp / Feels °${uTemp}`, stroke: "#ff3b30", size: 48, grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { scale: "y2", label: "Hum %", stroke: "#34c759", size: 44, side: 1, grid: { show: false } }
+                ],
+                series: [
+                    timeSeriesCfg,
+                    {
+                        label: "Temp",
+                        stroke: "#ff3b30",
+                        fill: "rgba(255, 59, 48, 0.07)",
+                        width: 2,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(1) + `°${uTemp}`
+                    },
+                    {
+                        label: "Feels",
+                        stroke: "#ff9f0a",
+                        dash: [5, 3],
+                        width: 1.75,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(1) + `°${uTemp}`
+                    },
+                    {
+                        scale: "y2",
+                        label: "Hum",
+                        stroke: "#34c759",
+                        width: 1.75,
+                        points: { show: false },
+                        value: (u, v) => v == null ? " -- " : Math.round(v) + "%"
+                    }
+                ]
+            };
+            historyCharts.temp = new uPlot(optsTemp, dataTemp, document.getElementById('chart-hist-temp'));
+
+            // 2. Wind / Gust / Hourly Prevailing Direction Ribbon Chart
+            const dataWind = [historyData.time, windArr, gustArr, historyData.wind_dir];
+            const optsWind = {
+                width: width,
+                height: 245,
+                cursor: sharedCursor,
+                hooks: {
+                    setScale: sharedHooks.setScale,
+                    draw: [drawWindDirectionRibbon]
+                },
+                scales: {
+                    // Extra top headroom (1.35x) so wind gust peaks stay cleanly below the top hourly direction ribbon
+                    y: { range: (u, dataMin, dataMax) => [0, Math.max(8, Math.ceil((dataMax || 0) * 1.35))] },
+                    y2: { range: [0, 360] }
+                },
+                axes: [
+                    { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { label: `Wind ${uWind}`, stroke: "#00e5ff", size: 48, grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    {
+                        scale: "y2",
+                        label: "Dir",
+                        stroke: "#c084fc",
+                        size: 44,
+                        side: 1,
+                        splits: () => [0, 90, 180, 270, 360],
+                        values: (u, splits) => splits.map(v => v === 0 || v === 360 ? "N" : v === 90 ? "E" : v === 180 ? "S" : "W"),
+                        grid: { show: false }
+                    }
+                ],
+                series: [
+                    timeSeriesCfg,
+                    {
+                        label: "Speed",
+                        stroke: "#00e5ff",
+                        fill: "rgba(0, 229, 255, 0.07)",
+                        width: 2,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(windDec) + ` ${uWind}`
+                    },
+                    {
+                        label: "Gust",
+                        stroke: "#ffd600",
+                        width: 1.5,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(windDec) + ` ${uWind}`
+                    },
+                    {
+                        scale: "y2",
+                        label: "Dir",
+                        stroke: "#c084fc",
+                        width: 0,
+                        points: { show: true, size: 3.2, fill: "rgba(192, 132, 252, 0.32)", stroke: "rgba(192, 132, 252, 0.45)" },
+                        paths: () => null,
+                        value: (u, v) => v == null ? "   --   " : `${Math.round(v)}° ${degToCardinal(v)}`
+                    }
+                ]
+            };
+            historyCharts.wind = new uPlot(optsWind, dataWind, document.getElementById('chart-hist-wind'));
+
+            // 3. Atmospheric Pressure / Solar / Dew Point Chart
+            const dataEnv = [historyData.time, pressArr, historyData.solar, dewPointArr];
+            const optsEnv = {
+                width: width,
+                height: 245,
+                cursor: sharedCursor,
+                hooks: sharedHooks,
+                scales: {
+                    y: {
+                        range: (u, dataMin, dataMax) => {
+                            if (dataMin == null || dataMax == null) {
+                                return uPress === 'inHg' ? [28.9, 30.7] : (uPress === 'mmHg' ? [735, 780] : [980, 1040]);
+                            }
+                            if (uPress === 'inHg') {
+                                let pad = Math.max(0.12, (dataMax - dataMin) * 0.25);
+                                return [parseFloat((dataMin - pad).toFixed(2)), parseFloat((dataMax + pad).toFixed(2))];
+                            }
+                            let pad = Math.max(uPress === 'mmHg' ? 3 : 4, (dataMax - dataMin) * 0.25);
+                            return [Math.floor(dataMin - pad), Math.ceil(dataMax + pad)];
+                        }
+                    },
+                    y2: {
+                        range: (u, dataMin, dataMax) => [0, Math.max(200, Math.ceil((dataMax || 0) * 1.12))]
+                    },
+                    y3: {
+                        range: (u, dataMin, dataMax) => {
+                            if (dataMin == null || dataMax == null) return uTemp === 'F' ? [20, 77] : [-5, 25];
+                            let pad = Math.max(2, (dataMax - dataMin) * 0.2);
+                            return [Math.floor(dataMin - pad), Math.ceil(dataMax + pad)];
+                        }
+                    }
+                },
+                axes: [
+                    { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { label: `Pressure ${uPress}`, stroke: "#af52de", size: 52, grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { scale: "y2", label: "Solar W/m²", stroke: "#ff9100", size: 48, side: 1, grid: { show: false } }
+                ],
+                series: [
+                    timeSeriesCfg,
+                    {
+                        label: "Press",
+                        stroke: "#af52de",
+                        width: 2,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "   --   " : v.toFixed(pressDec) + ` ${uPress}`
+                    },
+                    {
+                        scale: "y2",
+                        label: "Solar",
+                        stroke: "#ff9100",
+                        fill: "rgba(255, 145, 0, 0.08)",
+                        width: 1.75,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : Math.round(v) + " W/m²"
+                    },
+                    {
+                        scale: "y3",
+                        label: "Dew Pt",
+                        stroke: "#38bdf8",
+                        dash: [5, 3],
+                        width: 1.75,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(1) + `°${uTemp}`
+                    }
+                ]
+            };
+            historyCharts.env = new uPlot(optsEnv, dataEnv, document.getElementById('chart-hist-env'));
+
+            // 4. Precipitation (Rate & Cumulative) Chart
+            const dataPrecip = [historyData.time, precipRateArr, historyPrecipCml];
+            const optsPrecip = {
+                width: width,
+                height: 245,
+                cursor: sharedCursor,
+                hooks: sharedHooks,
+                scales: {
+                    y: {
+                        range: (u, dataMin, dataMax) => {
+                            const minTop = (uPrecip === 'in') ? 0.25 : 5;
+                            const top = Math.max(minTop, (dataMax || 0) * 1.25);
+                            return [0, uPrecip === 'in' ? parseFloat(top.toFixed(2)) : Math.ceil(top)];
+                        }
+                    },
+                    y2: {
+                        range: (u, dataMin, dataMax) => {
+                            const minTop = (uPrecip === 'in') ? 0.1 : 2;
+                            const top = Math.max(minTop, (dataMax || 0) * 1.2);
+                            return [0, uPrecip === 'in' ? parseFloat(top.toFixed(2)) : Math.ceil(top)];
+                        }
+                    }
+                },
+                axes: [
+                    { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { label: `Rate ${uPrecip}/h`, stroke: "#0088ff", size: 48, grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { scale: "y2", label: `24h Rain ${uPrecip}`, stroke: "#00d2ff", size: 48, side: 1, grid: { show: false } }
+                ],
+                series: [
+                    timeSeriesCfg,
+                    {
+                        label: "Rate",
+                        stroke: "#0088ff",
+                        width: 2,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(precipRateDec) + ` ${uPrecip}/h`
+                    },
+                    {
+                        scale: "y2",
+                        label: "24h Rain",
+                        stroke: "#00d2ff",
+                        fill: "rgba(0, 210, 255, 0.08)",
+                        width: 2,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(precipCmlDec) + ` ${uPrecip}`
+                    }
+                ]
+            };
+            historyCharts.precip = new uPlot(optsPrecip, dataPrecip, document.getElementById('chart-hist-precip'));
+
+            resizeHistoryCharts();
         }
 
         function resizeHistoryCharts() {
             const container = document.getElementById('history-container');
             if (container && historyCharts.temp) {
                 const cols = window.innerWidth < 850 ? 1 : 2;
-                const cardWidth = Math.floor((container.clientWidth - (cols > 1 ? 16 : 0)) / cols) - 40;
+                const cardWidth = Math.floor((container.clientWidth - (cols > 1 ? 16 : 0)) / cols) - 38;
                 const width = Math.max(280, cardWidth);
-                if (historyCharts.temp) historyCharts.temp.setSize({ width: width, height: 230 });
-                if (historyCharts.wind) historyCharts.wind.setSize({ width: width, height: 230 });
-                if (historyCharts.env) historyCharts.env.setSize({ width: width, height: 230 });
-                if (historyCharts.precip) historyCharts.precip.setSize({ width: width, height: 230 });
+                if (historyCharts.temp) historyCharts.temp.setSize({ width: width, height: 235 });
+                if (historyCharts.wind) historyCharts.wind.setSize({ width: width, height: 235 });
+                if (historyCharts.env) historyCharts.env.setSize({ width: width, height: 235 });
+                if (historyCharts.precip) historyCharts.precip.setSize({ width: width, height: 235 });
             }
         }
 
@@ -7138,22 +8354,44 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
         });
 
         let uplotInstance = null;
-        function updateLiveChart() {
+        function renderLiveChartData(liveData, recreate = false) {
             const container = document.getElementById('chart-container');
             if (!container) return;
             const legendWidth = container.clientWidth > 650 ? 250 : 0;
             const width = Math.max(300, container.clientWidth - legendWidth);
 
-            const defaultData = [
-                [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].map(h => Math.floor(Date.now()/1000) - (24 - h)*3600), // times
-                [15.5, 15.0, 14.8, 14.2, 13.8, 13.5, 13.2, 14.0, 15.2, 17.0, 18.5, 20.0, 21.5, 22.0, 22.2, 21.8, 20.5, 19.2, 18.0, 17.2, 16.8, 16.5, 16.0, 15.8], // temp
-                [2.5, 2.8, 3.0, 2.4, 2.0, 1.8, 2.2, 3.5, 4.0, 4.8, 5.5, 6.0, 6.2, 5.8, 5.0, 4.5, 4.2, 3.8, 3.2, 2.8, 2.5, 2.2, 2.0, 2.4], // wind_speed
-                [180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 10, 20, 30, 40, 50], // wind_dir
-                [4.5, 5.0, 5.5, 4.8, 3.8, 3.5, 4.0, 6.2, 7.5, 8.8, 9.8, 11.0, 11.5, 10.5, 9.2, 8.0, 7.8, 6.8, 5.8, 5.2, 4.8, 4.2, 3.8, 4.5], // wind_gust
-                [85, 88, 90, 92, 95, 96, 94, 88, 80, 72, 65, 58, 52, 50, 48, 52, 58, 65, 72, 78, 82, 84, 85, 86], // humidity
-                [1012.5, 1012.2, 1011.8, 1011.5, 1011.0, 1010.8, 1011.2, 1011.5, 1012.0, 1012.5, 1012.8, 1013.2, 1013.5, 1013.2, 1012.8, 1012.5, 1012.2, 1012.5, 1012.8, 1013.0, 1013.2, 1013.5, 1013.8, 1013.5], // pressure
-                [0, 0, 0, 0, 0, 0, 50, 150, 300, 500, 650, 800, 900, 850, 750, 600, 450, 250, 100, 10, 0, 0, 0, 0], // solar_rad
-                [0, 0, 0, 0.5, 1.2, 2.5, 1.8, 0.8, 0.2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] // precip_rate
+            const u = window.g_units || {};
+            const uTemp = u.temp || 'C';
+            const uWind = u.wind || 'm/s';
+            const uPrecip = u.precip || 'mm';
+            const uPress = u.press || 'hPa';
+            const windDec = (uWind === 'bft') ? 0 : 1;
+            const pressDec = (uPress === 'inHg') ? 2 : 1;
+            const precipDec = (uPrecip === 'in') ? 2 : 1;
+
+            const defaultRaw = {
+                time: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].map(h => Math.floor(Date.now()/1000) - (24 - h)*3600),
+                temp: [15.5, 15.0, 14.8, 14.2, 13.8, 13.5, 13.2, 14.0, 15.2, 17.0, 18.5, 20.0, 21.5, 22.0, 22.2, 21.8, 20.5, 19.2, 18.0, 17.2, 16.8, 16.5, 16.0, 15.8],
+                wind_speed: [2.5, 2.8, 3.0, 2.4, 2.0, 1.8, 2.2, 3.5, 4.0, 4.8, 5.5, 6.0, 6.2, 5.8, 5.0, 4.5, 4.2, 3.8, 3.2, 2.8, 2.5, 2.2, 2.0, 2.4],
+                wind_dir: [180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 10, 20, 30, 40, 50],
+                wind_gust: [4.5, 5.0, 5.5, 4.8, 3.8, 3.5, 4.0, 6.2, 7.5, 8.8, 9.8, 11.0, 11.5, 10.5, 9.2, 8.0, 7.8, 6.8, 5.8, 5.2, 4.8, 4.2, 3.8, 4.5],
+                humidity: [85, 88, 90, 92, 95, 96, 94, 88, 80, 72, 65, 58, 52, 50, 48, 52, 58, 65, 72, 78, 82, 84, 85, 86],
+                pressure: [1012.5, 1012.2, 1011.8, 1011.5, 1011.0, 1010.8, 1011.2, 1011.5, 1012.0, 1012.5, 1012.8, 1013.2, 1013.5, 1013.2, 1012.8, 1012.5, 1012.2, 1012.5, 1012.8, 1013.0, 1013.2, 1013.5, 1013.8, 1013.5],
+                solar_rad: [0, 0, 0, 0, 0, 0, 50, 150, 300, 500, 650, 800, 900, 850, 750, 600, 450, 250, 100, 10, 0, 0, 0, 0],
+                precip_rate: [0, 0, 0, 0.5, 1.2, 2.5, 1.8, 0.8, 0.2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            };
+
+            const src = (liveData && liveData.time && liveData.time.length > 0) ? liveData : defaultRaw;
+            const finalData = [
+                src.time,
+                convertArr(src.temp, convertTempFromC, 1),
+                convertArr(src.wind_speed, convertWindFromMs, windDec),
+                src.wind_dir,
+                convertArr(src.wind_gust, convertWindFromMs, windDec),
+                src.humidity,
+                convertArr(src.pressure, convertPressFromHpa, pressDec),
+                src.solar_rad,
+                convertArr(src.precip_rate, convertPrecipFromMm, precipDec)
             ];
 
             const opts = {
@@ -7171,7 +8409,13 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                     },
                     pressure: {
                         range: (u, dataMin, dataMax) => {
-                            if (dataMin == null || dataMax == null) return [980, 1040];
+                            if (dataMin == null || dataMax == null) {
+                                return uPress === 'inHg' ? [28.9, 30.7] : (uPress === 'mmHg' ? [735, 780] : [980, 1040]);
+                            }
+                            if (uPress === 'inHg') {
+                                let pad = Math.max(0.15, (dataMax - dataMin) * 0.25);
+                                return [parseFloat((dataMin - pad).toFixed(2)), parseFloat((dataMax + pad).toFixed(2))];
+                            }
                             let pad = Math.max(5, (dataMax - dataMin) * 0.25);
                             return [Math.floor(dataMin - pad), Math.ceil(dataMax + pad)];
                         },
@@ -7180,7 +8424,11 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         range: (u, dataMin, dataMax) => [0, Math.max(200, Math.ceil((dataMax || 0) * 1.1))],
                     },
                     precip_rate: {
-                        range: (u, dataMin, dataMax) => [0, Math.max(5, Math.ceil((dataMax || 0) * 1.25))],
+                        range: (u, dataMin, dataMax) => {
+                            const minTop = (uPrecip === 'in') ? 0.25 : 5;
+                            const top = Math.max(minTop, (dataMax || 0) * 1.25);
+                            return [0, uPrecip === 'in' ? parseFloat(top.toFixed(2)) : Math.ceil(top)];
+                        },
                     }
                 },
                 axes: [
@@ -7189,13 +8437,13 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         grid: { stroke: "rgba(255, 255, 255, 0.05)" }
                     },
                     {
-                        label: "Temp °C",
+                        label: `Temp °${uTemp}`,
                         stroke: "#ff3b30",
                         grid: { stroke: "rgba(255, 255, 255, 0.05)" }
                     },
                     {
                         scale: 'y2',
-                        label: "Wind m/s",
+                        label: `Wind ${uWind}`,
                         stroke: "#00e5ff",
                         side: 1,
                         grid: {
@@ -7206,12 +8454,12 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                 series: [
                     {},
                     {
-                        label: "Temp °C",
+                        label: `Temp °${uTemp}`,
                         stroke: "#ff3b30",
                         width: 2,
                     },
                     {
-                        label: "Wind Speed m/s",
+                        label: `Wind Speed ${uWind}`,
                         stroke: "#00e5ff",
                         scale: 'y2',
                         width: 2,
@@ -7251,7 +8499,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         },
                     },
                     {
-                        label: "Wind Gust m/s",
+                        label: `Wind Gust ${uWind}`,
                         stroke: "#ffd600",
                         scale: 'y2',
                         width: 2,
@@ -7263,7 +8511,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         width: 2,
                     },
                     {
-                        label: "Pressure hPa",
+                        label: `Pressure ${uPress}`,
                         stroke: "#af52de",
                         scale: 'pressure',
                         width: 2,
@@ -7275,7 +8523,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         width: 2,
                     },
                     {
-                        label: "Precip Rate mm/h",
+                        label: `Precip Rate ${uPrecip}/h`,
                         stroke: "#0088ff",
                         scale: 'precip_rate',
                         width: 2,
@@ -7283,40 +8531,29 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                 ]
             };
 
+            if (recreate && uplotInstance) {
+                uplotInstance.destroy();
+                uplotInstance = null;
+            }
+
+            if (uplotInstance) {
+                uplotInstance.setSize({ width: width, height: 280 });
+                uplotInstance.setData(finalData);
+            } else {
+                uplotInstance = new uPlot(opts, finalData, container);
+            }
+        }
+
+        function updateLiveChart() {
             fetch('/live_trends')
                 .then(res => res.json())
                 .then(liveData => {
-                    let finalData;
-                    if (liveData.time && liveData.time.length > 0) {
-                        finalData = [
-                            liveData.time,
-                            liveData.temp,
-                            liveData.wind_speed,
-                            liveData.wind_dir,
-                            liveData.wind_gust,
-                            liveData.humidity,
-                            liveData.pressure,
-                            liveData.solar_rad,
-                            liveData.precip_rate
-                        ];
-                    } else {
-                        finalData = defaultData;
-                    }
-                    
-                    if (uplotInstance) {
-                        uplotInstance.setSize({ width: width, height: 280 });
-                        uplotInstance.setData(finalData);
-                    } else {
-                        uplotInstance = new uPlot(opts, finalData, container);
-                    }
+                    window.g_lastLiveTrendsData = liveData;
+                    renderLiveChartData(liveData, false);
                 })
                 .catch(err => {
                     console.error("Error fetching live trends:", err);
-                    if (uplotInstance) {
-                        uplotInstance.setSize({ width: width, height: 400 });
-                    } else {
-                        uplotInstance = new uPlot(opts, defaultData, container);
-                    }
+                    renderLiveChartData(null, false);
                 });
         }
 
@@ -7353,6 +8590,9 @@ static const char g_sd_csv_viewer_html[] = R"html(
             --bg: #0b0f19;
             --panel: #141c29;
             --panel-2: #101722;
+            --card-bg: rgba(255, 255, 255, 0.03);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --glass-blur: blur(12px);
             --border: #2a3647;
             --text: #f1f3f9;
             --muted: #8c9cb2;
@@ -7373,7 +8613,7 @@ static const char g_sd_csv_viewer_html[] = R"html(
         .topbar { display: flex; gap: 1rem; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
         h1 { margin: 0; color: var(--cyan); font-size: clamp(1.35rem, 3vw, 2rem); }
         #filename { margin-top: .35rem; color: var(--muted); font: .9rem ui-monospace, monospace; overflow-wrap: anywhere; }
-        .actions { display: flex; flex-wrap: wrap; gap: .55rem; }
+        .actions { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; }
         button, .button {
             appearance: none;
             border: 1px solid #376276;
@@ -7388,16 +8628,133 @@ static const char g_sd_csv_viewer_html[] = R"html(
             text-decoration: none;
         }
         button:hover, .button:hover { background: rgba(0, 210, 255, .23); }
+        .sync-badge {
+            font-size: 0.72rem;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 0.35rem 0.65rem;
+            border-radius: 999px;
+        }
         .status { margin: 1rem 0; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); color: var(--muted); }
         .status.error { border-color: rgba(255, 65, 108, .55); color: var(--red); }
-        .summary { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1rem 0; }
-        .chip { padding: .5rem .75rem; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); color: var(--muted); }
+        .summary { display: flex; flex-wrap: wrap; flex-wrap: balance; gap: .6rem; margin: 1rem 0; }
+        .chip { padding: .5rem .75rem; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: .84rem; }
         .chip strong { color: var(--text); }
         .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 1rem 0; }
-        .chart-card { min-width: 0; padding: .8rem; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); overflow: hidden; }
-        .chart-card h2 { margin: 0 0 .65rem; font-size: 1rem; }
-        .chart-host { min-height: 260px; }
-        .chart-note { margin: .5rem 0 0; color: var(--muted); font-size: .75rem; }
+        .chart-card {
+            min-width: 0;
+            padding: 1.15rem;
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            background: var(--card-bg);
+            backdrop-filter: var(--glass-blur);
+        }
+        .hist-card-header {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            margin-bottom: 0.55rem;
+        }
+        .hist-card-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .hist-card-title-row h3 {
+            margin: 0;
+            font-size: 0.98rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            color: var(--text);
+        }
+        .hist-stats-strip {
+            display: flex;
+            flex-wrap: wrap;
+            flex-wrap: balance;
+            gap: 0.35rem 0.5rem;
+            align-items: center;
+            min-height: 22px;
+        }
+        .hist-stat-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            font-size: 0.69rem;
+            line-height: 1.2;
+            padding: 0.16rem 0.45rem;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.035);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            color: var(--muted);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+        .hist-stat-pill .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .hist-stat-pill strong {
+            color: var(--text);
+            font-weight: 600;
+        }
+        #charts .uplot { font-family: inherit; }
+        #charts .uplot canvas { display: block; }
+        #charts .uplot .u-legend {
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            gap: 0.45rem !important;
+            font-size: 0.72rem !important;
+            font-variant-numeric: tabular-nums !important;
+            padding: 0.2rem 0.3rem !important;
+            margin: 0.25rem 0 0 0 !important;
+            height: 26px !important;
+            min-height: 26px !important;
+            max-height: 26px !important;
+            white-space: nowrap !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            scrollbar-width: none !important;
+        }
+        #charts .uplot .u-legend::-webkit-scrollbar {
+            display: none !important;
+        }
+        #charts .uplot .u-legend .u-series {
+            display: inline-flex !important;
+            align-items: center !important;
+            flex-shrink: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        #charts .uplot .u-legend .u-series th,
+        #charts .uplot .u-legend .u-series td {
+            padding: 0 2px !important;
+            white-space: nowrap !important;
+        }
+        #charts .uplot .u-legend .u-marker {
+            width: 8px !important;
+            height: 8px !important;
+            border-radius: 2px !important;
+            margin-right: 3px !important;
+        }
+        #charts .uplot .u-legend .u-value {
+            display: inline-block !important;
+            min-width: 5.2ch !important;
+            text-align: left !important;
+            font-variant-numeric: tabular-nums !important;
+            color: var(--text) !important;
+            font-weight: 600 !important;
+        }
+        #charts .uplot .u-legend .u-series:first-child .u-value {
+            min-width: 9.6ch !important;
+            color: var(--cyan) !important;
+        }
         .table-panel { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); overflow: hidden; }
         .table-tools { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; padding: .8rem; border-bottom: 1px solid var(--border); }
         input[type="search"] { flex: 1 1 260px; min-width: 0; padding: .6rem .75rem; border: 1px solid var(--border); border-radius: 8px; background: #090e16; color: var(--text); }
@@ -7414,7 +8771,6 @@ static const char g_sd_csv_viewer_html[] = R"html(
         td.quality-warn { color: var(--yellow); background: rgba(255, 207, 51, .08); font-weight: 700; }
         tr.quality-warn-row td:first-child { box-shadow: inset 3px 0 var(--yellow); }
         .hidden { display: none !important; }
-        .uplot { font-family: inherit; }
         @media (max-width: 850px) { .charts { grid-template-columns: 1fr; } .page { padding: .8rem; } }
     </style>
 </head>
@@ -7426,6 +8782,8 @@ static const char g_sd_csv_viewer_html[] = R"html(
                 <div id="filename">Loading…</div>
             </div>
             <div class="actions">
+                <span id="sync-badge" class="sync-badge hidden">Crosshair &amp; Zoom Linked</span>
+                <button type="button" id="reset-zoom-button" class="hidden">Reset Zoom</button>
                 <button type="button" id="close-button">Close tab</button>
                 <a class="button" id="download-button" href="#">Download CSV</a>
             </div>
@@ -7458,9 +8816,24 @@ static const char g_sd_csv_viewer_html[] = R"html(
         const searchEl = document.getElementById('search');
         const newestFirstEl = document.getElementById('newest-first');
         const visibleCountEl = document.getElementById('visible-count');
-        const plots = [];
+        const resetZoomBtn = document.getElementById('reset-zoom-button');
+        const syncBadgeEl = document.getElementById('sync-badge');
+
+        let csvCharts = {};
+        let csvTimeRange = null;
+        let isSyncingCsvZoom = false;
         let headers = [];
         let sourceRows = [];
+        let activeUnits = {
+            temp_id: 0,
+            wind_id: 0,
+            precip_id: 0,
+            press_id: 0,
+            temp: 'C',
+            wind: 'm/s',
+            precip: 'mm',
+            press: 'hPa'
+        };
 
         document.getElementById('filename').textContent = fileName || 'No CSV file selected';
         document.getElementById('download-button').href = '/sd/download?file=' + encodeURIComponent(fileName);
@@ -7468,6 +8841,7 @@ static const char g_sd_csv_viewer_html[] = R"html(
             window.close();
             setTimeout(() => history.back(), 50);
         });
+        resetZoomBtn.addEventListener('click', resetCsvZoom);
 
         function parseCsv(text) {
             const parsed = [];
@@ -7520,6 +8894,53 @@ static const char g_sd_csv_viewer_html[] = R"html(
             return value !== '' && value !== 'OK' && value !== '0' && value !== '0X00000000';
         }
 
+        function formatTableHeader(header) {
+            const uTemp = activeUnits.temp || 'C';
+            const uWind = activeUnits.wind || 'm/s';
+            const uPrecip = activeUnits.precip || 'mm';
+            const uPress = activeUnits.press || 'hPa';
+            if (header === 'Temp_Avg_C') return `Temp_Avg_${uTemp}`;
+            if (header === 'WindSpeed_Avg_m_s') return `WindSpeed_Avg_${uWind}`;
+            if (header === 'WindGust_Max_m_s') return `WindGust_Max_${uWind}`;
+            if (header === 'PrecipRate_Avg_mm_h') return `PrecipRate_Avg_${uPrecip}/h`;
+            if (header === 'PrecipAccum_mm') return `PrecipAccum_${uPrecip}`;
+            if (header === 'Pressure_Avg_hPa') return `Pressure_Avg_${uPress}`;
+            return header;
+        }
+
+        function formatTableCell(header, rawValue) {
+            if (rawValue == null || rawValue === '') return '';
+            const num = numericValue(rawValue);
+            if (num === null) return String(rawValue);
+            const uWind = activeUnits.wind || 'm/s';
+            const uPrecip = activeUnits.precip || 'mm';
+            const uPress = activeUnits.press || 'hPa';
+            const windDec = (uWind === 'bft') ? 0 : 1;
+            const pressDec = (uPress === 'inHg') ? 2 : 1;
+            const precipRateDec = (uPrecip === 'in') ? 2 : 1;
+            if (header === 'Temp_Avg_C') {
+                const c = convertTempFromC(num);
+                return c == null ? String(rawValue) : c.toFixed(1);
+            }
+            if (header === 'WindSpeed_Avg_m_s' || header === 'WindGust_Max_m_s') {
+                const w = convertWindFromMs(num);
+                return w == null ? String(rawValue) : w.toFixed(windDec);
+            }
+            if (header === 'PrecipRate_Avg_mm_h') {
+                const p = convertPrecipFromMm(num);
+                return p == null ? String(rawValue) : p.toFixed(precipRateDec);
+            }
+            if (header === 'PrecipAccum_mm') {
+                const p = convertPrecipFromMm(num);
+                return p == null ? String(rawValue) : p.toFixed(2);
+            }
+            if (header === 'Pressure_Avg_hPa') {
+                const pr = convertPressFromHpa(num);
+                return pr == null ? String(rawValue) : pr.toFixed(pressDec);
+            }
+            return String(rawValue);
+        }
+
         function renderTable() {
             const needle = searchEl.value.trim().toLowerCase();
             let rows = sourceRows.filter(row => !needle || row.some(value => String(value).toLowerCase().includes(needle)));
@@ -7528,7 +8949,7 @@ static const char g_sd_csv_viewer_html[] = R"html(
             const headRow = document.createElement('tr');
             headers.forEach(header => {
                 const th = document.createElement('th');
-                th.textContent = header;
+                th.textContent = formatTableHeader(header);
                 headRow.appendChild(th);
             });
             document.getElementById('table-head').replaceChildren(headRow);
@@ -7540,10 +8961,11 @@ static const char g_sd_csv_viewer_html[] = R"html(
                 if (warning) tr.classList.add('quality-warn-row');
                 headers.forEach((header, index) => {
                     const td = document.createElement('td');
-                    const value = row[index] == null ? '' : String(row[index]);
+                    const rawValue = row[index] == null ? '' : String(row[index]);
+                    const value = formatTableCell(header, rawValue);
                     td.textContent = value || '—';
                     if (value === '') td.classList.add('empty');
-                    if (numericValue(value) !== null) td.classList.add('number');
+                    if (numericValue(rawValue) !== null) td.classList.add('number');
                     if (header === 'QualityFlags' || header === 'QualityFlagsHex') {
                         td.classList.add(warning ? 'quality-warn' : 'quality-ok');
                     }
@@ -7560,59 +8982,325 @@ static const char g_sd_csv_viewer_html[] = R"html(
             return index < 0 ? null : sourceRows.map(row => numericValue(row[index]));
         }
 
-        function addChart(title, xValues, definitions, rightRange) {
-            const available = definitions.filter(definition => {
-                definition.values = columnValues(definition.column);
-                return definition.values && definition.values.some(value => value !== null);
+        const csvSync = (typeof uPlot !== 'undefined' && uPlot.sync) ? uPlot.sync('csvWeather') : { key: 'csvWeather' };
+        const CARDINALS_16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+
+        function degToCardinal(deg) {
+            if (deg == null || isNaN(deg)) return "--";
+            const idx = Math.round((((deg % 360) + 360) % 360) / 22.5) % 16;
+            return CARDINALS_16[idx];
+        }
+
+        function calcCsvDewPoint(t, rh) {
+            if (t == null || rh == null || rh <= 0) return null;
+            const a = 17.625, b = 243.04;
+            const c = Math.log(Math.max(1, rh) / 100.0) + (a * t) / (b + t);
+            return parseFloat(((b * c) / (a - c)).toFixed(1));
+        }
+
+        function calcCsvFeelsLike(t, w, rh) {
+            if (t == null) return null;
+            if (t <= 10.0 && w != null) {
+                const vKmh = w * 3.6;
+                if (vKmh > 4.8) {
+                    const vPow = Math.pow(vKmh, 0.16);
+                    return parseFloat((13.12 + 0.6215 * t - 11.37 * vPow + 0.3965 * t * vPow).toFixed(1));
+                }
+                return parseFloat(t.toFixed(1));
+            }
+            if (t > 26.7 && rh != null) {
+                const hi = -8.78469475556 + 1.61139411 * t + 2.33854883889 * rh
+                    - 0.14611605 * t * rh - 0.012308094 * t * t - 0.0164248277778 * rh * rh
+                    + 0.002211732 * t * t * rh + 0.00072546 * t * rh * rh - 0.000003582 * t * t * rh * rh;
+                return parseFloat(hi.toFixed(1));
+            }
+            return parseFloat(t.toFixed(1));
+        }
+
+        function msToBft(ms) {
+            if (ms == null || isNaN(ms)) return null;
+            if (ms < 0.5) return 0;
+            if (ms < 1.6) return 1;
+            if (ms < 3.4) return 2;
+            if (ms < 5.5) return 3;
+            if (ms < 8.0) return 4;
+            if (ms < 10.8) return 5;
+            if (ms < 13.9) return 6;
+            if (ms < 17.2) return 7;
+            if (ms < 20.8) return 8;
+            if (ms < 24.5) return 9;
+            if (ms < 28.5) return 10;
+            if (ms < 32.7) return 11;
+            return 12;
+        }
+
+        function convertTempFromC(valC) {
+            if (valC == null || isNaN(valC)) return null;
+            if (activeUnits.temp_id === 1 || activeUnits.temp === 'F') {
+                return valC * 1.8 + 32.0;
+            }
+            return valC;
+        }
+
+        function convertWindFromMs(valMs) {
+            if (valMs == null || isNaN(valMs)) return null;
+            switch (Number(activeUnits.wind_id)) {
+                case 1: return valMs * 3.6;
+                case 2: return valMs * 2.236936;
+                case 3: return valMs * 3.28084;
+                case 4: return msToBft(valMs);
+                case 5: return valMs * 1.943844;
+                case 0:
+                default: return valMs;
+            }
+        }
+
+        function convertPrecipFromMm(valMm) {
+            if (valMm == null || isNaN(valMm)) return null;
+            if (activeUnits.precip_id === 1 || activeUnits.precip === 'in') {
+                return valMm * 0.03937008;
+            }
+            return valMm;
+        }
+
+        function convertPressFromHpa(valHpa) {
+            if (valHpa == null || isNaN(valHpa)) return null;
+            switch (Number(activeUnits.press_id)) {
+                case 1: return valHpa * 0.7500616;
+                case 2: return valHpa * 0.02952998;
+                case 0:
+                default: return valHpa;
+            }
+        }
+
+        function convertArr(arr, fn, decimals = 2) {
+            if (!Array.isArray(arr)) return arr;
+            const factor = Math.pow(10, decimals);
+            return arr.map(v => {
+                if (v == null || isNaN(v)) return null;
+                const conv = fn(v);
+                return conv == null ? null : Math.round(conv * factor) / factor;
             });
-            if (!available.length) return;
+        }
 
-            const card = document.createElement('article');
-            card.className = 'chart-card';
-            const heading = document.createElement('h2');
-            heading.textContent = title;
-            const host = document.createElement('div');
-            host.className = 'chart-host';
-            card.append(heading, host);
-            chartsEl.appendChild(card);
-
-            const hasRightAxis = available.some(definition => definition.scale === 'right');
-            const scales = { x: { time: true }, left: { auto: true } };
-            if (hasRightAxis) {
-                scales.right = rightRange
-                    ? { range: () => rightRange }
-                    : { auto: true };
+        function calcSeriesStats(arr, decimals = 1) {
+            if (!arr || !arr.length) return null;
+            let min = Infinity, max = -Infinity, sum = 0, count = 0;
+            for (let i = 0; i < arr.length; i++) {
+                const v = arr[i];
+                if (v != null && !isNaN(v)) {
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                    sum += v;
+                    count++;
+                }
             }
-            const axes = [
-                { stroke: '#8c9cb2', grid: { stroke: '#263344' } },
-                { scale: 'left', stroke: available[0].color, grid: { stroke: '#263344' } }
-            ];
-            if (hasRightAxis) {
-                const rightDefinition = available.find(definition => definition.scale === 'right');
-                axes.push({ scale: 'right', side: 1, stroke: rightDefinition.color, grid: { show: false } });
-            }
-            const series = [{}].concat(available.map(definition => ({
-                label: definition.label,
-                scale: definition.scale || 'left',
-                stroke: definition.color,
-                width: 2,
-                spanGaps: false,
-                points: { show: true, size: 4 }
-            })));
-            const options = {
-                width: Math.max(300, Math.floor(card.clientWidth - 26)),
-                height: 260,
-                scales,
-                axes,
-                series,
-                legend: { show: true },
-                cursor: { drag: { x: true, y: false } }
+            if (!count) return null;
+            return {
+                min: min.toFixed(decimals),
+                max: max.toFixed(decimals),
+                avg: (sum / count).toFixed(decimals),
+                count: count
             };
-            const data = [xValues].concat(available.map(definition => definition.values));
-            plots.push({ plot: new uPlot(options, data, host), card });
+        }
+
+        function calcCircularWindMean(dirs, speeds) {
+            if (!dirs || !dirs.length) return null;
+            let sinSum = 0, cosSum = 0, count = 0;
+            for (let i = 0; i < dirs.length; i++) {
+                const d = dirs[i];
+                if (d == null || isNaN(d)) continue;
+                const spd = (speeds && speeds[i] != null && !isNaN(speeds[i])) ? Math.max(0.15, speeds[i]) : 1.0;
+                const rad = (d * Math.PI) / 180.0;
+                sinSum += Math.sin(rad) * spd;
+                cosSum += Math.cos(rad) * spd;
+                count++;
+            }
+            if (!count || (Math.abs(sinSum) < 1e-6 && Math.abs(cosSum) < 1e-6)) return null;
+            const deg = Math.round(((Math.atan2(sinSum, cosSum) * 180.0) / Math.PI + 360.0) % 360.0);
+            return { deg: deg, cardinal: degToCardinal(deg) };
+        }
+
+        function formatCsvLegendTime(u, ts) {
+            if (ts == null || isNaN(ts)) return "--/-- --:--";
+            const d = new Date(ts * 1000);
+            const mo = String(d.getMonth() + 1).padStart(2, '0');
+            const da = String(d.getDate()).padStart(2, '0');
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            return `${mo}/${da} ${hh}:${mm}`;
+        }
+
+        function syncCsvScaleX(sourcePlot, min, max) {
+            if (isSyncingCsvZoom) return;
+            isSyncingCsvZoom = true;
+            try {
+                Object.values(csvCharts).forEach(plot => {
+                    if (plot && plot !== sourcePlot) {
+                        plot.setScale('x', { min: min, max: max });
+                    }
+                });
+            } finally {
+                isSyncingCsvZoom = false;
+            }
+        }
+
+        function resetCsvZoom() {
+            if (!csvTimeRange) return;
+            isSyncingCsvZoom = true;
+            try {
+                Object.values(csvCharts).forEach(plot => {
+                    if (plot) {
+                        plot.setScale('x', { min: csvTimeRange[0], max: csvTimeRange[1] });
+                    }
+                });
+            } finally {
+                isSyncingCsvZoom = false;
+            }
+        }
+
+        function drawWindDirectionRibbon(u) {
+            const ctx = u.ctx;
+            const { left, top, width, height } = u.bbox;
+            if (width <= 40 || height <= 60) return;
+
+            const pxRatio = (typeof uPlot !== 'undefined' && uPlot.pxRatio) ? uPlot.pxRatio : (window.devicePixelRatio || 1);
+            const bandH = Math.round(34 * pxRatio);
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(left, top, width, bandH + 2 * pxRatio);
+            ctx.clip();
+
+            ctx.fillStyle = "rgba(168, 85, 247, 0.08)";
+            ctx.fillRect(left, top, width, bandH);
+            ctx.strokeStyle = "rgba(168, 85, 247, 0.24)";
+            ctx.lineWidth = Math.max(1, 0.8 * pxRatio);
+            ctx.beginPath();
+            ctx.moveTo(left, top + bandH);
+            ctx.lineTo(left + width, top + bandH);
+            ctx.stroke();
+
+            const times = u.data[0];
+            const speeds = u.data[1];
+            const dirs = u.data[3];
+            if (!times || !times.length || !dirs) {
+                ctx.restore();
+                return;
+            }
+
+            const xMin = u.scales.x.min != null ? u.scales.x.min : times[0];
+            const xMax = u.scales.x.max != null ? u.scales.x.max : times[times.length - 1];
+            const spanSec = Math.max(300, xMax - xMin);
+
+            const cssWidth = width / pxRatio;
+            const maxSlots = Math.max(4, Math.floor((cssWidth - 36) / 30));
+            const candidateSteps = [900, 1800, 3600, 7200, 10800, 14400];
+            let stepSec = 3600;
+            for (const s of candidateSteps) {
+                if (spanSec / s <= maxSlots) {
+                    stepSec = s;
+                    break;
+                }
+                stepSec = s;
+            }
+
+            const stepLabel = stepSec >= 3600 ? `${stepSec / 3600}H` : `${stepSec / 60}M`;
+            ctx.font = `700 ${Math.round(8.5 * pxRatio)}px -apple-system, BlinkMacSystemFont, sans-serif`;
+            ctx.fillStyle = "rgba(216, 180, 254, 0.72)";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            ctx.fillText(stepLabel, left + 5 * pxRatio, top + bandH * 0.5);
+
+            const firstBucket = Math.floor(xMin / stepSec) * stepSec;
+            let lastDrawnX = left + 26 * pxRatio;
+            const minGapPx = 26 * pxRatio;
+
+            for (let bStart = firstBucket; bStart <= xMax; bStart += stepSec) {
+                const bEnd = bStart + stepSec;
+                let sinSum = 0, cosSum = 0, spdSum = 0, tSum = 0, cnt = 0;
+                for (let i = 0; i < times.length; i++) {
+                    const t = times[i];
+                    if (t < bStart || t >= bEnd || t < xMin || t > xMax) continue;
+                    const d = dirs[i];
+                    if (d == null || isNaN(d)) continue;
+                    const s = (speeds && speeds[i] != null && !isNaN(speeds[i])) ? speeds[i] : 0.5;
+                    const w = Math.max(0.15, s);
+                    const rad = (d * Math.PI) / 180.0;
+                    sinSum += Math.sin(rad) * w;
+                    cosSum += Math.cos(rad) * w;
+                    spdSum += s;
+                    tSum += t;
+                    cnt++;
+                }
+                if (!cnt) continue;
+
+                const centerT = tSum / cnt;
+                const cx = u.valToPos(centerT, 'x', true);
+                if (cx < lastDrawnX || cx > left + width - 14 * pxRatio) continue;
+                lastDrawnX = cx + minGapPx;
+
+                const avgDeg = ((Math.atan2(sinSum, cosSum) * 180.0) / Math.PI + 360.0) % 360.0;
+                const avgSpd = spdSum / cnt;
+                const cardinal = degToCardinal(avgDeg);
+
+                const flowCompass = (avgDeg + 180.0) % 360.0;
+                const angleRad = ((flowCompass - 90.0) * Math.PI) / 180.0;
+
+                const arrowCy = top + 11 * pxRatio;
+                const arrowLen = 6.2 * pxRatio;
+                const headLen = 4.2 * pxRatio;
+
+                ctx.save();
+                ctx.translate(cx, arrowCy);
+                ctx.rotate(angleRad);
+
+                const alpha = avgSpd < 0.2 ? 0.55 : Math.min(1.0, 0.72 + (avgSpd / 12.0) * 0.28);
+                ctx.strokeStyle = `rgba(216, 180, 254, ${alpha.toFixed(2)})`;
+                ctx.fillStyle = `rgba(216, 180, 254, ${alpha.toFixed(2)})`;
+                ctx.lineWidth = 1.65 * pxRatio;
+                ctx.lineCap = "round";
+                ctx.lineJoin = "round";
+
+                ctx.beginPath();
+                ctx.moveTo(-arrowLen * 0.75, 0);
+                ctx.lineTo(arrowLen * 0.75, 0);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(arrowLen * 0.85, 0);
+                ctx.lineTo(arrowLen * 0.85 - headLen, -headLen * 0.68);
+                ctx.lineTo(arrowLen * 0.85 - headLen, headLen * 0.68);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+
+                ctx.font = `700 ${Math.round(9 * pxRatio)}px -apple-system, BlinkMacSystemFont, sans-serif`;
+                ctx.fillStyle = avgSpd >= 3.0 ? "#f3e8ff" : "#d8b4fe";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(cardinal, cx, top + 25.5 * pxRatio);
+            }
+
+            ctx.restore();
+        }
+
+        function resizeCsvCharts() {
+            if (!chartsEl || chartsEl.classList.contains('hidden')) return;
+            const cols = window.innerWidth < 850 ? 1 : 2;
+            const cardWidth = Math.floor((chartsEl.clientWidth - (cols > 1 ? 16 : 0)) / cols) - 38;
+            const width = Math.max(280, cardWidth);
+            Object.values(csvCharts).forEach(plot => {
+                if (plot) plot.setSize({ width: width, height: 235 });
+            });
         }
 
         function renderWeatherCharts() {
+            Object.values(csvCharts).forEach(c => {
+                if (c && typeof c.destroy === 'function') c.destroy();
+            });
+            csvCharts = {};
+
             const timestampIndex = headers.indexOf('UnixTimestamp');
             if (timestampIndex < 0 || sourceRows.length < 2 || typeof uPlot === 'undefined') return false;
             const ordered = sourceRows
@@ -7623,59 +9311,437 @@ static const char g_sd_csv_viewer_html[] = R"html(
             sourceRows = ordered.map(item => item.row);
             const xValues = ordered.map(item => item.timestamp);
 
-            // The chart container must participate in layout before uPlot is
-            // constructed. Measuring it while .hidden produced the 300 px
-            // fallback plots seen inside much wider cards.
-            chartsEl.classList.remove('hidden');
+            const tempValsC = columnValues('Temp_Avg_C');
+            const humVals = columnValues('Hum_Avg_pct');
+            const windValsMs = columnValues('WindSpeed_Avg_m_s');
+            const gustValsMs = columnValues('WindGust_Max_m_s');
+            const windDirVals = columnValues('WindDir_Prevailing_deg');
+            const precipRateValsMm = columnValues('PrecipRate_Avg_mm_h');
+            const precipAccumValsMm = columnValues('PrecipAccum_mm');
+            const pressValsHpa = columnValues('Pressure_Avg_hPa');
+            const solarVals = columnValues('SolarRad_Avg_W_m2');
 
-            addChart('Temperature & Humidity', xValues, [
-                { column: 'Temp_Avg_C', label: 'Temperature °C', color: '#ff5c5c' },
-                { column: 'Hum_Avg_pct', label: 'Humidity %', color: '#00f5a0', scale: 'right' }
-            ], [0, 100]);
-            addChart('Wind', xValues, [
-                { column: 'WindSpeed_Avg_m_s', label: 'Speed m/s', color: '#00d2ff' },
-                { column: 'WindGust_Max_m_s', label: 'Gust m/s', color: '#ffcf33' },
-                { column: 'WindDir_Prevailing_deg', label: 'Direction °', color: '#b15cff', scale: 'right' }
-            ], [0, 360]);
-            addChart('Precipitation', xValues, [
-                { column: 'PrecipRate_Avg_mm_h', label: 'Rate mm/h', color: '#2196ff' },
-                { column: 'PrecipAccum_mm', label: '5-min accumulation mm', color: '#00e5ff', scale: 'right' }
-            ]);
-            addChart('Atmospheric & Solar', xValues, [
-                { column: 'Pressure_Avg_hPa', label: 'Pressure hPa', color: '#b15cff' },
-                { column: 'SolarRad_Avg_W_m2', label: 'Solar W/m²', color: '#ff9800', scale: 'right' }
-            ]);
-            if (chartsEl.childElementCount) {
-                return true;
+            const hasAnyWeather = [tempValsC, humVals, windValsMs, precipRateValsMm, pressValsHpa, solarVals]
+                .some(arr => arr && arr.some(v => v !== null));
+            if (!hasAnyWeather) return false;
+
+            const n = xValues.length;
+            csvTimeRange = [xValues[0], xValues[n - 1]];
+
+            const uTemp = activeUnits.temp || 'C';
+            const uWind = activeUnits.wind || 'm/s';
+            const uPrecip = activeUnits.precip || 'mm';
+            const uPress = activeUnits.press || 'hPa';
+            const windDec = (uWind === 'bft') ? 0 : 1;
+            const pressDec = (uPress === 'inHg') ? 2 : 1;
+            const precipRateDec = (uPrecip === 'in') ? 2 : 1;
+            const precipCmlDec = 2;
+
+            const feelsLikeArrC = [];
+            const dewPointArrC = [];
+            const precipCmlMm = [];
+            let runningCmlMm = 0;
+            let wetIntervals = 0;
+
+            for (let i = 0; i < n; i++) {
+                const t = tempValsC ? tempValsC[i] : null;
+                const rh = humVals ? humVals[i] : null;
+                const w = windValsMs ? windValsMs[i] : null;
+
+                feelsLikeArrC.push(calcCsvFeelsLike(t, w, rh));
+                dewPointArrC.push(calcCsvDewPoint(t, rh));
+
+                let delta = (precipAccumValsMm && precipAccumValsMm[i] != null) ? precipAccumValsMm[i] : null;
+                if (delta == null && precipRateValsMm && precipRateValsMm[i] != null) {
+                    delta = precipRateValsMm[i] * (5 / 60);
+                }
+                if (delta != null && !isNaN(delta) && delta > 0) {
+                    runningCmlMm += delta;
+                    wetIntervals++;
+                } else if (precipRateValsMm && precipRateValsMm[i] > 0) {
+                    wetIntervals++;
+                }
+                precipCmlMm.push(parseFloat(runningCmlMm.toFixed(3)));
             }
-            chartsEl.classList.add('hidden');
-            return false;
+
+            const tempArr = convertArr(tempValsC || new Array(n).fill(null), convertTempFromC, 1);
+            const feelsLikeArr = convertArr(feelsLikeArrC, convertTempFromC, 1);
+            const dewPointArr = convertArr(dewPointArrC, convertTempFromC, 1);
+            const humArr = humVals || new Array(n).fill(null);
+            const windArr = convertArr(windValsMs || new Array(n).fill(null), convertWindFromMs, windDec);
+            const gustArr = convertArr(gustValsMs || new Array(n).fill(null), convertWindFromMs, windDec);
+            const dirArr = windDirVals || new Array(n).fill(null);
+            const pressArr = convertArr(pressValsHpa || new Array(n).fill(null), convertPressFromHpa, pressDec);
+            const solarArr = solarVals || new Array(n).fill(null);
+            const precipRateArr = convertArr(precipRateValsMm || new Array(n).fill(null), convertPrecipFromMm, precipRateDec);
+            const precipCmlArr = convertArr(precipCmlMm, convertPrecipFromMm, precipCmlDec);
+
+            const stTemp = calcSeriesStats(tempArr, 1);
+            const stFeels = calcSeriesStats(feelsLikeArr, 1);
+            const stHum = calcSeriesStats(humArr, 0);
+
+            const stWind = calcSeriesStats(windArr, windDec);
+            const stGust = calcSeriesStats(gustArr, windDec);
+            const stDir = calcCircularWindMean(dirArr, windValsMs);
+
+            const stPress = calcSeriesStats(pressArr, pressDec);
+            const stSolar = calcSeriesStats(solarArr, 0);
+            const stDew = calcSeriesStats(dewPointArr, 1);
+
+            let pressTrendStr = "";
+            if (pressArr && n >= 6) {
+                const lookback = Math.max(0, n - 36);
+                const pNow = pressArr[n - 1];
+                let pPrev = null;
+                for (let k = lookback; k < n - 1; k++) {
+                    if (pressArr[k] != null && !isNaN(pressArr[k])) {
+                        pPrev = pressArr[k];
+                        break;
+                    }
+                }
+                if (pNow != null && pPrev != null) {
+                    const dp = pNow - pPrev;
+                    const thresh = (uPress === 'inHg') ? 0.015 : (uPress === 'mmHg' ? 0.38 : 0.5);
+                    const arrow = dp > thresh ? "↗" : (dp < -thresh ? "↘" : "→");
+                    pressTrendStr = ` · ${arrow} ${dp >= 0 ? '+' : ''}${dp.toFixed(pressDec)}`;
+                }
+            }
+
+            const stRate = calcSeriesStats(precipRateArr, precipRateDec);
+            const totalRainVal = convertPrecipFromMm(runningCmlMm);
+            const totalRain = (totalRainVal != null ? totalRainVal : 0).toFixed(precipCmlDec);
+            const wetMinutes = wetIntervals * 5;
+            const wetTimeStr = wetMinutes >= 60 ? `${Math.floor(wetMinutes / 60)}h ${wetMinutes % 60}m` : `${wetMinutes}m`;
+
+            const pill = (color, label, text) =>
+                `<span class="hist-stat-pill"><span class="dot" style="background:${color};"></span>${label}: <strong>${text}</strong></span>`;
+
+            const tempBadges = [
+                stTemp ? pill("#ff3b30", "Temp", `${stTemp.min}° / ${stTemp.avg}° / ${stTemp.max}°${uTemp}`) : "",
+                stFeels ? pill("#ff9f0a", "Feels", `${stFeels.min}°–${stFeels.max}°${uTemp}`) : "",
+                stHum ? pill("#34c759", "Hum", `${stHum.min}% / ${stHum.avg}% / ${stHum.max}%`) : ""
+            ].join("");
+
+            const windArrowDeg = stDir ? ((stDir.deg + 180) % 360) : 0;
+            const windBadges = [
+                stWind ? pill("#00e5ff", "Avg / Max", `${stWind.avg} / ${stWind.max} ${uWind}`) : "",
+                stGust ? pill("#ffd600", "Peak Gust", `${stGust.max} ${uWind}`) : "",
+                stDir ? pill("#c084fc", "Prevailing", `<span style="display:inline-block;transform:rotate(${windArrowDeg}deg);font-weight:700;">↑</span> ${stDir.cardinal} (${stDir.deg}°)`) : ""
+            ].join("");
+
+            const envBadges = [
+                stPress ? pill("#af52de", "Press", `${stPress.min}–${stPress.max} ${uPress}${pressTrendStr}`) : "",
+                stSolar ? pill("#ff9100", "Solar Peak / Avg", `${stSolar.max} / ${stSolar.avg} W/m²`) : "",
+                stDew ? pill("#38bdf8", "Dew Pt", `${stDew.min}° / ${stDew.avg}° / ${stDew.max}°${uTemp}`) : ""
+            ].join("");
+
+            const precipBadges = [
+                pill("#00d2ff", "Total Rain", `${totalRain} ${uPrecip}`),
+                stRate ? pill("#0088ff", "Peak Rate", `${stRate.max} ${uPrecip}/h`) : "",
+                pill("#64748b", "Wet Time", wetTimeStr)
+            ].join("");
+
+            // Participate in layout before measuring clientWidth
+            chartsEl.classList.remove('hidden');
+            resetZoomBtn.classList.remove('hidden');
+            syncBadgeEl.classList.remove('hidden');
+
+            chartsEl.innerHTML = `
+                <article class="chart-card">
+                    <div class="hist-card-header">
+                        <div class="hist-card-title-row">
+                            <h3>Temperature, Feels Like &amp; Humidity</h3>
+                        </div>
+                        <div class="hist-stats-strip">${tempBadges}</div>
+                    </div>
+                    <div id="csv-chart-temp"></div>
+                </article>
+                <article class="chart-card">
+                    <div class="hist-card-header">
+                        <div class="hist-card-title-row">
+                            <h3>Wind Trends &amp; Hourly Prevailing Direction</h3>
+                        </div>
+                        <div class="hist-stats-strip">${windBadges}</div>
+                    </div>
+                    <div id="csv-chart-wind"></div>
+                </article>
+                <article class="chart-card">
+                    <div class="hist-card-header">
+                        <div class="hist-card-title-row">
+                            <h3>Atmospheric, Solar &amp; Dew Point</h3>
+                        </div>
+                        <div class="hist-stats-strip">${envBadges}</div>
+                    </div>
+                    <div id="csv-chart-env"></div>
+                </article>
+                <article class="chart-card">
+                    <div class="hist-card-header">
+                        <div class="hist-card-title-row">
+                            <h3>Precipitation (Rate &amp; Cumulative)</h3>
+                        </div>
+                        <div class="hist-stats-strip">${precipBadges}</div>
+                    </div>
+                    <div id="csv-chart-precip"></div>
+                </article>`;
+
+            const cols = window.innerWidth < 850 ? 1 : 2;
+            const cardWidth = Math.floor((chartsEl.clientWidth - (cols > 1 ? 16 : 0)) / cols) - 38;
+            const width = Math.max(280, cardWidth);
+
+            const sharedCursor = {
+                sync: { key: csvSync.key, setSeries: false },
+                drag: { x: true, y: false },
+                points: { size: 5.5, width: 1.5 }
+            };
+
+            const sharedHooks = {
+                setScale: [
+                    (u, key) => {
+                        if (key === 'x') {
+                            syncCsvScaleX(u, u.scales.x.min, u.scales.x.max);
+                        }
+                    }
+                ]
+            };
+
+            const timeSeriesCfg = {
+                label: "Time",
+                value: formatCsvLegendTime
+            };
+
+            // 1. Temperature, Feels Like & Humidity
+            csvCharts.temp = new uPlot({
+                width: width,
+                height: 235,
+                cursor: sharedCursor,
+                hooks: sharedHooks,
+                scales: {
+                    y: {
+                        range: (u, dataMin, dataMax) => {
+                            if (dataMin == null || dataMax == null) return uTemp === 'F' ? [32, 86] : [0, 30];
+                            const pad = Math.max(1.5, (dataMax - dataMin) * 0.16);
+                            return [Math.floor(dataMin - pad), Math.ceil(dataMax + pad)];
+                        }
+                    },
+                    y2: { range: [0, 100] }
+                },
+                axes: [
+                    { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { label: `Temp / Feels °${uTemp}`, stroke: "#ff3b30", size: 48, grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { scale: "y2", label: "Hum %", stroke: "#34c759", size: 44, side: 1, grid: { show: false } }
+                ],
+                series: [
+                    timeSeriesCfg,
+                    {
+                        label: "Temp",
+                        stroke: "#ff3b30",
+                        fill: "rgba(255, 59, 48, 0.07)",
+                        width: 2,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(1) + `°${uTemp}`
+                    },
+                    {
+                        label: "Feels",
+                        stroke: "#ff9f0a",
+                        dash: [5, 3],
+                        width: 1.75,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(1) + `°${uTemp}`
+                    },
+                    {
+                        scale: "y2",
+                        label: "Hum",
+                        stroke: "#34c759",
+                        width: 1.75,
+                        points: { show: false },
+                        value: (u, v) => v == null ? " -- " : Math.round(v) + "%"
+                    }
+                ]
+            }, [xValues, tempArr, feelsLikeArr, humArr], document.getElementById('csv-chart-temp'));
+
+            // 2. Wind Trends & Hourly Prevailing Direction Ribbon
+            csvCharts.wind = new uPlot({
+                width: width,
+                height: 235,
+                cursor: sharedCursor,
+                hooks: {
+                    setScale: sharedHooks.setScale,
+                    draw: [drawWindDirectionRibbon]
+                },
+                scales: {
+                    y: { range: (u, dataMin, dataMax) => [0, Math.max(8, Math.ceil((dataMax || 0) * 1.35))] },
+                    y2: { range: [0, 360] }
+                },
+                axes: [
+                    { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { label: `Wind ${uWind}`, stroke: "#00e5ff", size: 48, grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    {
+                        scale: "y2",
+                        label: "Dir",
+                        stroke: "#c084fc",
+                        size: 44,
+                        side: 1,
+                        splits: () => [0, 90, 180, 270, 360],
+                        values: (u, splits) => splits.map(v => v === 0 || v === 360 ? "N" : v === 90 ? "E" : v === 180 ? "S" : "W"),
+                        grid: { show: false }
+                    }
+                ],
+                series: [
+                    timeSeriesCfg,
+                    {
+                        label: "Speed",
+                        stroke: "#00e5ff",
+                        fill: "rgba(0, 229, 255, 0.07)",
+                        width: 2,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(windDec) + ` ${uWind}`
+                    },
+                    {
+                        label: "Gust",
+                        stroke: "#ffd600",
+                        width: 1.5,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(windDec) + ` ${uWind}`
+                    },
+                    {
+                        scale: "y2",
+                        label: "Dir",
+                        stroke: "#c084fc",
+                        width: 0,
+                        points: { show: true, size: 3.2, fill: "rgba(192, 132, 252, 0.32)", stroke: "rgba(192, 132, 252, 0.45)" },
+                        paths: () => null,
+                        value: (u, v) => v == null ? "   --   " : `${Math.round(v)}° ${degToCardinal(v)}`
+                    }
+                ]
+            }, [xValues, windArr, gustArr, dirArr], document.getElementById('csv-chart-wind'));
+
+            // 3. Atmospheric, Solar & Dew Point
+            csvCharts.env = new uPlot({
+                width: width,
+                height: 235,
+                cursor: sharedCursor,
+                hooks: sharedHooks,
+                scales: {
+                    y: {
+                        range: (u, dataMin, dataMax) => {
+                            if (dataMin == null || dataMax == null) {
+                                return uPress === 'inHg' ? [28.9, 30.7] : (uPress === 'mmHg' ? [735, 780] : [980, 1040]);
+                            }
+                            if (uPress === 'inHg') {
+                                const pad = Math.max(0.12, (dataMax - dataMin) * 0.25);
+                                return [parseFloat((dataMin - pad).toFixed(2)), parseFloat((dataMax + pad).toFixed(2))];
+                            }
+                            const pad = Math.max(uPress === 'mmHg' ? 3 : 4, (dataMax - dataMin) * 0.25);
+                            return [Math.floor(dataMin - pad), Math.ceil(dataMax + pad)];
+                        }
+                    },
+                    y2: {
+                        range: (u, dataMin, dataMax) => [0, Math.max(200, Math.ceil((dataMax || 0) * 1.12))]
+                    },
+                    y3: {
+                        range: (u, dataMin, dataMax) => {
+                            if (dataMin == null || dataMax == null) return uTemp === 'F' ? [20, 77] : [-5, 25];
+                            const pad = Math.max(2, (dataMax - dataMin) * 0.2);
+                            return [Math.floor(dataMin - pad), Math.ceil(dataMax + pad)];
+                        }
+                    }
+                },
+                axes: [
+                    { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { label: `Pressure ${uPress}`, stroke: "#af52de", size: 52, grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { scale: "y2", label: "Solar W/m²", stroke: "#ff9100", size: 48, side: 1, grid: { show: false } }
+                ],
+                series: [
+                    timeSeriesCfg,
+                    {
+                        label: "Press",
+                        stroke: "#af52de",
+                        width: 2,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "   --   " : v.toFixed(pressDec) + ` ${uPress}`
+                    },
+                    {
+                        scale: "y2",
+                        label: "Solar",
+                        stroke: "#ff9100",
+                        fill: "rgba(255, 145, 0, 0.08)",
+                        width: 1.75,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : Math.round(v) + " W/m²"
+                    },
+                    {
+                        scale: "y3",
+                        label: "Dew Pt",
+                        stroke: "#38bdf8",
+                        dash: [5, 3],
+                        width: 1.75,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(1) + `°${uTemp}`
+                    }
+                ]
+            }, [xValues, pressArr, solarArr, dewPointArr], document.getElementById('csv-chart-env'));
+
+            // 4. Precipitation (Rate & Cumulative)
+            csvCharts.precip = new uPlot({
+                width: width,
+                height: 235,
+                cursor: sharedCursor,
+                hooks: sharedHooks,
+                scales: {
+                    y: {
+                        range: (u, dataMin, dataMax) => {
+                            const minTop = (uPrecip === 'in') ? 0.25 : 5;
+                            const top = Math.max(minTop, (dataMax || 0) * 1.25);
+                            return [0, uPrecip === 'in' ? parseFloat(top.toFixed(2)) : Math.ceil(top)];
+                        }
+                    },
+                    y2: {
+                        range: (u, dataMin, dataMax) => {
+                            const minTop = (uPrecip === 'in') ? 0.1 : 2;
+                            const top = Math.max(minTop, (dataMax || 0) * 1.2);
+                            return [0, uPrecip === 'in' ? parseFloat(top.toFixed(2)) : Math.ceil(top)];
+                        }
+                    }
+                },
+                axes: [
+                    { stroke: "#8c9cb2", grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { label: `Rate ${uPrecip}/h`, stroke: "#0088ff", size: 48, grid: { stroke: "rgba(255,255,255,0.035)" } },
+                    { scale: "y2", label: `Total Rain ${uPrecip}`, stroke: "#00d2ff", size: 48, side: 1, grid: { show: false } }
+                ],
+                series: [
+                    timeSeriesCfg,
+                    {
+                        label: "Rate",
+                        stroke: "#0088ff",
+                        width: 2,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(precipRateDec) + ` ${uPrecip}/h`
+                    },
+                    {
+                        scale: "y2",
+                        label: "Total Rain",
+                        stroke: "#00d2ff",
+                        fill: "rgba(0, 210, 255, 0.08)",
+                        width: 2,
+                        points: { show: false },
+                        value: (u, v) => v == null ? "  --  " : v.toFixed(precipCmlDec) + ` ${uPrecip}`
+                    }
+                ]
+            }, [xValues, precipRateArr, precipCmlArr], document.getElementById('csv-chart-precip'));
+
+            resizeCsvCharts();
+            return true;
         }
 
-        async function loadCsv() {
-            if (!fileName || !fileName.toLowerCase().endsWith('.csv')) {
-                throw new Error('Select a CSV file from the SD Card section.');
-            }
-            const response = await fetch('/sd/download?file=' + encodeURIComponent(fileName), { cache: 'no-store' });
-            if (!response.ok) {
-                const detail = (await response.text()).trim();
-                throw new Error(detail || ('CSV request failed with HTTP ' + response.status));
-            }
-            const parsed = parseCsv(await response.text());
-            if (!parsed.length) throw new Error('The CSV file is empty.');
-            headers = parsed[0].map((header, index) => header.trim() || ('Column ' + (index + 1)));
-            sourceRows = parsed.slice(1).map(row => {
-                const normalized = new Array(headers.length).fill('');
-                for (let i = 0; i < Math.min(row.length, headers.length); i++) normalized[i] = row[i];
-                return normalized;
-            });
+        let isWeatherCharted = false;
 
-            const charted = renderWeatherCharts();
+        function renderSummaryChips() {
             summaryEl.innerHTML = '';
             const values = [
                 ['Rows', sourceRows.length],
                 ['Columns', headers.length],
-                ['Type', charted ? 'Weather history' : 'CSV / daily metadata'],
+                ['Type', isWeatherCharted ? 'Weather history' : 'CSV / daily metadata'],
+                ['Units', `°${activeUnits.temp} · ${activeUnits.wind} · ${activeUnits.precip} · ${activeUnits.press}`],
                 ['Processing', 'In this browser']
             ];
             values.forEach(([label, value]) => {
@@ -7686,12 +9752,81 @@ static const char g_sd_csv_viewer_html[] = R"html(
                 chip.append(strong, document.createTextNode(String(value)));
                 summaryEl.appendChild(chip);
             });
+        }
+
+        async function pollCsvUnits() {
+            try {
+                const r = await fetch('/api/v1/units', { cache: 'no-store' });
+                if (!r.ok) return;
+                const u = await r.json();
+                if (!u || u.status !== 'ok') return;
+                if (u.temp_id !== activeUnits.temp_id ||
+                    u.wind_id !== activeUnits.wind_id ||
+                    u.precip_id !== activeUnits.precip_id ||
+                    u.press_id !== activeUnits.press_id) {
+                    activeUnits = {
+                        temp_id: u.temp_id,
+                        wind_id: u.wind_id,
+                        precip_id: u.precip_id,
+                        press_id: u.press_id,
+                        temp: u.temp || 'C',
+                        wind: u.wind || 'm/s',
+                        precip: u.precip || 'mm',
+                        press: u.press || 'hPa'
+                    };
+                    if (sourceRows.length) {
+                        isWeatherCharted = renderWeatherCharts();
+                        renderSummaryChips();
+                        renderTable();
+                    }
+                }
+            } catch (e) {}
+        }
+
+        async function loadCsv() {
+            if (!fileName || !fileName.toLowerCase().endsWith('.csv')) {
+                throw new Error('Select a CSV file from the SD Card section.');
+            }
+            const [csvResp] = await Promise.all([
+                fetch('/sd/download?file=' + encodeURIComponent(fileName), { cache: 'no-store' }),
+                fetch('/api/v1/units', { cache: 'no-store' })
+                    .then(r => r.ok ? r.json() : null)
+                    .then(u => {
+                        if (u && u.status === 'ok') {
+                            activeUnits = {
+                                temp_id: u.temp_id,
+                                wind_id: u.wind_id,
+                                precip_id: u.precip_id,
+                                press_id: u.press_id,
+                                temp: u.temp || 'C',
+                                wind: u.wind || 'm/s',
+                                precip: u.precip || 'mm',
+                                press: u.press || 'hPa'
+                            };
+                        }
+                    })
+                    .catch(() => {})
+            ]);
+            if (!csvResp.ok) {
+                const detail = (await csvResp.text()).trim();
+                throw new Error(detail || ('CSV request failed with HTTP ' + csvResp.status));
+            }
+            const parsed = parseCsv(await csvResp.text());
+            if (!parsed.length) throw new Error('The CSV file is empty.');
+            headers = parsed[0].map((header, index) => header.trim() || ('Column ' + (index + 1)));
+            sourceRows = parsed.slice(1).map(row => {
+                const normalized = new Array(headers.length).fill('');
+                for (let i = 0; i < Math.min(row.length, headers.length); i++) normalized[i] = row[i];
+                return normalized;
+            });
+
+            isWeatherCharted = renderWeatherCharts();
+            renderSummaryChips();
             summaryEl.classList.remove('hidden');
             tablePanel.classList.remove('hidden');
-            statusEl.textContent = charted
-                ? 'Loaded successfully. Charts and table were generated locally by your browser.'
-                : 'Loaded successfully. The table was generated locally by your browser.';
+            statusEl.classList.add('hidden');
             renderTable();
+            setInterval(pollCsvUnits, 3000);
         }
 
         searchEl.addEventListener('input', renderTable);
@@ -7699,15 +9834,11 @@ static const char g_sd_csv_viewer_html[] = R"html(
         let resizeTimer;
         window.addEventListener('resize', () => {
             clearTimeout(resizeTimer);
-            resizeTimer = setTimeout(() => {
-                plots.forEach(entry => entry.plot.setSize({
-                    width: Math.max(300, Math.floor(entry.card.clientWidth - 26)),
-                    height: 260
-                }));
-            }, 100);
+            resizeTimer = setTimeout(resizeCsvCharts, 100);
         });
 
         loadCsv().catch(error => {
+            statusEl.classList.remove('hidden');
             statusEl.classList.add('error');
             statusEl.textContent = 'Unable to view CSV: ' + error.message;
         });
@@ -8424,6 +10555,14 @@ static esp_err_t get_status_handler(httpd_req_t *req) {
   MeshTelemetry::EvaluatorStatus mt_status = MeshTelemetry::get_evaluator_status(MeshTelemetry::MeshProtocol::MESHTASTIC);
   MeshTelemetry::EvaluatorStatus mc_status = MeshTelemetry::get_evaluator_status(MeshTelemetry::MeshProtocol::MESHCORE);
 
+  bsp_sdcard_status_info_t sd_info = {};
+#ifndef CONFIG_SCREENLESS
+  bsp_sdcard_get_status_info(&sd_info);
+  const bool sd_ejected = WeatherLogger::get_sd_status().ejected;
+#else
+  const bool sd_ejected = false;
+#endif
+
   int status_len = snprintf(
       json_buf, sizeof(json_buf),
       "{\"wifi_status\":\"%s\",\"wifi_ssid\":\"%s\",\"wifi_rssi\":%d,"
@@ -8445,6 +10584,7 @@ static esp_err_t get_status_handler(httpd_req_t *req) {
       "\"scan_active\":%s,\"scan_slot\":%d,\"scan_total_slots\":%u,\"scan_eta_sec\":%lu,\"scan_total_sec\":%lu,\"scan_profile\":%d,"
       "\"scan_completed\":%s,\"scan_cycle\":%u,\"scan_phase\":\"%s\","
       "\"station_type\":%d,\"freq_region\":%d,\"mqtt_disabled\":%s,\"lora_link_ok\":%s,\"is_screenless\":%s,"
+      "\"sd_mounted\":%s,\"sd_present\":%s,\"sd_ejected\":%s,\"sd_unusable\":%s,\"sd_capacity_gb\":%.2f,\"sd_fs_type\":\"%s\",\"sd_status_reason\":\"%s\","
       "\"listen_freq_hz\":%lu,\"listen_desc\":\"%s\",\"manual_slot\":%d,"
       "\"rx_packet_total\":%lu,"
       "\"region_base_hz\":%lu,\"tx_power_override\":%d,"
@@ -8459,6 +10599,7 @@ static esp_err_t get_status_handler(httpd_req_t *req) {
       "\"mc_events_hour\":%u,\"mc_cooldown_lvl\":%u,\"mc_last_reasons\":%lu,"
       "\"dev_name\":\"%s\","
       "\"recent_stations\":%s,"
+      "\"units\":{\"temp_id\":%d,\"wind_id\":%d,\"precip_id\":%d,\"press_id\":%d,\"temp\":\"%s\",\"wind\":\"%s\",\"precip\":\"%s\",\"press\":\"%s\"},"
       "\"weather\":{"
       "\"has_weather\":%s,\"temp\":%s,\"feels_like\":%s,\"humidity\":%s,"
       "\"precip_rate\":%s,\"precip_daily\":%s,\"precip_cml\":%s,\"precip_24h\":%s,\"pressure\":%s,\"wind_speed\":%s,\"wind_gust\":%s,"
@@ -8510,6 +10651,9 @@ static esp_err_t get_status_handler(httpd_req_t *req) {
       (WsHandler::get_scan_phase() == WsHandler::ScanPhase::WS1001) ? "ws1001" : "ws1300",
       station_type, (int)Settings::get_freq_region(), Settings::get_mqtt_disabled() ? "true" : "false",
       lora_link_ok ? "true" : "false", is_screenless ? "true" : "false",
+      sd_info.mounted ? "true" : "false", sd_info.present ? "true" : "false", sd_ejected ? "true" : "false",
+      sd_info.unusable ? "true" : "false", sd_info.capacity_gb,
+      sd_info.fs_type, sd_info.reason,
       (unsigned long)listen_freq_hz, listen_desc,
       (int)WsHandler::g_manual_listen_slot,
       (unsigned long)_rx_packet_total,
@@ -8544,6 +10688,11 @@ static esp_err_t get_status_handler(httpd_req_t *req) {
       (unsigned int)mc_status.events_this_hour, (unsigned int)mc_status.cooldown_level, (unsigned long)mc_status.last_reasons,
       Settings::get_device_name() ? Settings::get_device_name() : "",
       recent_json,
+      (int)Settings::get_temp_unit(),
+      (int)Settings::get_wind_speed_unit(),
+      (int)Settings::get_precip_unit(),
+      (int)Settings::get_press_unit(),
+      wx.unit_temp, wx.unit_wind, wx.unit_precip, wx.unit_press,
       wx.has_weather ? "true" : "false",
       wx.temp_json, wx.feels_like_json, wx.humidity_json,
       wx.precip_rate_json, wx.precip_daily_json, wx.precip_cml_json, wx.precip_24h_json, wx.pressure_json, wx.wind_speed_json, wx.wind_gust_json,
@@ -9499,7 +11648,17 @@ static esp_err_t get_llms_handler(httpd_req_t *req) {
 
 // POST /ota update handler
 static esp_err_t post_ota_handler(httpd_req_t *req) {
-    lv_port_show_ota_screen();
+  if (!Submit::try_lock_ota()) {
+    ESP_LOGW(TAG, "Rejecting Web OTA: another OTA operation is already in progress");
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                        "OTA already in progress");
+    return ESP_FAIL;
+  }
+  struct WebOtaLockGuard {
+    ~WebOtaLockGuard() { Submit::unlock_ota(); }
+  } web_ota_lock_guard;
+
+  lv_port_show_ota_screen();
 
   esp_ota_handle_t update_handle = 0;
   const esp_partition_t *update_partition =
@@ -9537,6 +11696,8 @@ static esp_err_t post_ota_handler(httpd_req_t *req) {
   int total_written = 0;
   int remaining = req->content_len;
   bool is_first_chunk = true;
+  int timeout_retries = 0;
+  static constexpr int MAX_OTA_SOCK_TIMEOUT_RETRIES = 6;
 
   while (remaining > 0 || req->content_len == 0) {
     int to_read = (remaining > 0) ? MIN(remaining, 4096) : 4096;
@@ -9544,8 +11705,12 @@ static esp_err_t post_ota_handler(httpd_req_t *req) {
 
     if (received <= 0) {
       if (received == HTTPD_SOCK_ERR_TIMEOUT) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-        continue;
+        if (++timeout_retries <= MAX_OTA_SOCK_TIMEOUT_RETRIES) {
+          vTaskDelay(pdMS_TO_TICKS(10));
+          continue;
+        }
+        ESP_LOGE(TAG, "OTA upload timed out after %d retries (%d bytes written)",
+                 timeout_retries, total_written);
       }
       if (received == 0 && req->content_len == 0 && total_written > 0) {
         break;
@@ -9557,6 +11722,7 @@ static esp_err_t post_ota_handler(httpd_req_t *req) {
       httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Connection Lost");
       return ESP_FAIL;
     }
+    timeout_retries = 0;
 
     if (is_first_chunk) {
       is_first_chunk = false;
@@ -10362,7 +12528,7 @@ static esp_err_t post_pair_local_handler(httpd_req_t *req) {
       ws_sn[9] = (target_slot > 0) ? (uint8_t)(target_slot - 1) : 0;
     }
     if (!has_pubkey) {
-      memset(ws_pubkey, 0xAA, sizeof(ws_pubkey));
+      memset(ws_pubkey, 0xFF, sizeof(ws_pubkey));
     }
     Settings::set_ws_sn(ws_sn, sizeof(ws_sn));
     Settings::set_ws_pubkey(ws_pubkey, sizeof(ws_pubkey));
@@ -10604,7 +12770,6 @@ static esp_err_t get_live_trends_handler(httpd_req_t *req) {
 
 
 static esp_err_t get_history_handler(httpd_req_t *req) {
-    WeatherLogger::request_sd_probe();
     auto aggs = WeatherLogger::get_aggregates();
     httpd_resp_set_type(req, "application/json");
     
@@ -10765,20 +12930,33 @@ static bool has_csv_extension(const char *filename) {
 }
 
 static esp_err_t get_sd_status_handler(httpd_req_t *req) {
-    WeatherLogger::request_sd_probe();
     const SdLoggerStatus status = WeatherLogger::get_sd_status();
     const bool mounted = WeatherLogger::is_sd_mounted();
     const std::string escaped_error = escape_json_string(status.last_error);
-    char response[1024];
+    const std::string escaped_fs_type = escape_json_string(status.card_fs_type);
+    const std::string escaped_reason = escape_json_string(status.card_status_reason);
+    char response[1536];
     const int response_len = snprintf(
         response, sizeof(response),
-        "{\"mounted\":%s,\"writer_running\":%s,\"pending_records\":%u,"
+        "{\"mounted\":%s,\"card_present\":%s,\"ejected\":%s,\"card_unusable\":%s,"
+        "\"formatting\":%s,\"format_progress\":%u,"
+        "\"card_capacity_gb\":%.2f,\"card_fs_type\":\"%s\",\"card_status_reason\":\"%s\","
+        "\"writer_running\":%s,\"pending_records\":%u,"
         "\"weather_rows_written\":%lu,\"metadata_rows_written\":%lu,"
         "\"weather_rows_failed\":%lu,\"metadata_rows_failed\":%lu,"
         "\"retry_count\":%lu,\"last_success_timestamp\":%lld,"
         "\"last_error_timestamp\":%lld,\"mount_backoff_active\":%s,"
         "\"next_mount_attempt_timestamp\":%lld,\"last_error\":\"%s\"}",
-        mounted ? "true" : "false", status.writer_running ? "true" : "false",
+        mounted ? "true" : "false",
+        status.card_present ? "true" : "false",
+        status.ejected ? "true" : "false",
+        status.card_unusable ? "true" : "false",
+        status.formatting ? "true" : "false",
+        (unsigned int)status.format_progress,
+        status.card_capacity_gb,
+        escaped_fs_type.c_str(),
+        escaped_reason.c_str(),
+        status.writer_running ? "true" : "false",
         static_cast<unsigned int>(status.pending_records),
         (unsigned long)status.weather_rows_written,
         (unsigned long)status.metadata_rows_written,
@@ -10891,13 +13069,26 @@ static esp_err_t get_sd_view_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, g_sd_csv_viewer_html,
-                            strlen(g_sd_csv_viewer_html));
+                           strlen(g_sd_csv_viewer_html));
 }
 
 static esp_err_t get_sd_diagnose_handler(httpd_req_t *req) {
-    WeatherLogger::request_sd_probe();
+    const SdLoggerStatus sd_st = WeatherLogger::get_sd_status();
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    if (sd_st.formatting) {
+        httpd_resp_sendstr(req, "{\"mounted\":false,\"present\":true,\"formatting\":true}");
+        return ESP_OK;
+    }
+    if (sd_st.ejected) {
+        const bool present = bsp_sdcard_is_inserted();
+        char resp[192];
+        snprintf(resp, sizeof(resp),
+                 "{\"mounted\":false,\"present\":%s,\"ejected\":true,\"unusable\":false,\"status_reason\":\"Ejected (safe to remove)\"}",
+                 present ? "true" : "false");
+        httpd_resp_sendstr(req, resp);
+        return ESP_OK;
+    }
 
     char *diagnose_json = (char *)malloc(1024);
     if (!diagnose_json) {
@@ -10922,6 +13113,10 @@ static esp_err_t get_sd_diagnose_handler(httpd_req_t *req) {
 static esp_err_t get_sd_test_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    if (WeatherLogger::get_sd_status().formatting) {
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"SD card is currently formatting\"}");
+        return ESP_OK;
+    }
 
     bsp_spi_lock();
     // Check if mounted
@@ -10980,13 +13175,42 @@ static esp_err_t get_sd_test_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static esp_err_t post_sd_eject_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    if (!WeatherLogger::eject_sd()) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot eject SD card while formatting is in progress");
+        return ESP_FAIL;
+    }
+    httpd_resp_sendstr(req, "{\"status\":\"ejected\",\"ejected\":true,\"mounted\":false}");
+    return ESP_OK;
+}
+
+static esp_err_t post_sd_mount_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    bool mounted = WeatherLogger::mount_sd();
+    const SdLoggerStatus st = WeatherLogger::get_sd_status();
+    const std::string reason = escape_json_string(st.card_status_reason);
+    char resp[256];
+    snprintf(resp, sizeof(resp),
+             "{\"status\":\"%s\",\"mounted\":%s,\"ejected\":%s,\"card_present\":%s,\"message\":\"%s\"}",
+             mounted ? "mounted" : "unmounted",
+             mounted ? "true" : "false",
+             st.ejected ? "true" : "false",
+             st.card_present ? "true" : "false",
+             reason.c_str());
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
 static esp_err_t post_sd_format_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/json");
-    bool success = WeatherLogger::format_sd();
-    if (success) {
-        httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    bool started = WeatherLogger::start_format_sd_async();
+    if (started) {
+        httpd_resp_sendstr(req, "{\"status\":\"started\",\"async\":true}");
     } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Format failed");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start SD format task");
     }
     return ESP_OK;
 }
@@ -11563,6 +13787,105 @@ static esp_err_t weather_policy_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+esp_err_t units_config_handler(httpd_req_t *req) {
+  bool modified = false;
+  char buf[256] = {0};
+  if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) == ESP_OK) {
+    char param[32] = {0};
+
+    if (httpd_query_key_value(buf, "temp", param, sizeof(param)) == ESP_OK) {
+      int v = -1;
+      if (strcasecmp(param, "C") == 0 || strcmp(param, "0") == 0) v = 0;
+      else if (strcasecmp(param, "F") == 0 || strcmp(param, "1") == 0) v = 1;
+      if (v >= 0 && v <= 1) {
+        Settings::set_temp_unit(static_cast<TempUnit>(v));
+        modified = true;
+      }
+    }
+
+    if (httpd_query_key_value(buf, "wind", param, sizeof(param)) == ESP_OK) {
+      int v = -1;
+      if (strcasecmp(param, "m/s") == 0 || strcasecmp(param, "ms") == 0 || strcmp(param, "0") == 0) v = 0;
+      else if (strcasecmp(param, "km/h") == 0 || strcasecmp(param, "kmh") == 0 || strcmp(param, "1") == 0) v = 1;
+      else if (strcasecmp(param, "mph") == 0 || strcmp(param, "2") == 0) v = 2;
+      else if (strcasecmp(param, "ft/s") == 0 || strcasecmp(param, "fts") == 0 || strcmp(param, "3") == 0) v = 3;
+      else if (strcasecmp(param, "bft") == 0 || strcmp(param, "4") == 0) v = 4;
+      else if (strcasecmp(param, "kn") == 0 || strcmp(param, "5") == 0) v = 5;
+      if (v >= 0 && v <= 5) {
+        Settings::set_wind_speed_unit(static_cast<WindSpeedUnit>(v));
+        modified = true;
+      }
+    }
+
+    if (httpd_query_key_value(buf, "precip", param, sizeof(param)) == ESP_OK) {
+      int v = -1;
+      if (strcasecmp(param, "mm") == 0 || strcmp(param, "0") == 0) v = 0;
+      else if (strcasecmp(param, "in") == 0 || strcmp(param, "1") == 0) v = 1;
+      if (v >= 0 && v <= 1) {
+        Settings::set_precip_unit(static_cast<PrecipUnit>(v));
+        modified = true;
+      }
+    }
+
+    if (httpd_query_key_value(buf, "press", param, sizeof(param)) == ESP_OK) {
+      int v = -1;
+      if (strcasecmp(param, "hPa") == 0 || strcmp(param, "0") == 0) v = 0;
+      else if (strcasecmp(param, "mmHg") == 0 || strcmp(param, "1") == 0) v = 1;
+      else if (strcasecmp(param, "inHg") == 0 || strcmp(param, "2") == 0) v = 2;
+      if (v >= 0 && v <= 2) {
+        Settings::set_press_unit(static_cast<PressureUnit>(v));
+        modified = true;
+      }
+    }
+  }
+
+  if (modified) {
+    Settings::commit();
+#ifndef CONFIG_SCREENLESS
+    StateSniffer::publish_ws_content_update();
+#endif
+    ESP_LOGI(TAG, "Display units updated via Web UI -> temp=%d wind=%d precip=%d press=%d",
+             (int)Settings::get_temp_unit(),
+             (int)Settings::get_wind_speed_unit(),
+             (int)Settings::get_precip_unit(),
+             (int)Settings::get_press_unit());
+  }
+
+  const char *u_temp = (Settings::get_temp_unit() == TEMP_UNIT_F) ? "F" : "C";
+  const char *u_wind = "m/s";
+  switch (Settings::get_wind_speed_unit()) {
+    case WIND_SPEED_UNIT_KM_H:     u_wind = "km/h"; break;
+    case WIND_SPEED_UNIT_MI_H:     u_wind = "mph";  break;
+    case WIND_SPEED_UNIT_FT_S:     u_wind = "ft/s"; break;
+    case WIND_SPEED_UNIT_BEAUFORT: u_wind = "bft";  break;
+    case WIND_SPEED_UNIT_KNOTS:    u_wind = "kn";   break;
+    case WIND_SPEED_UNIT_M_S:
+    default:                       u_wind = "m/s";  break;
+  }
+  const char *u_precip = (Settings::get_precip_unit() == PRECIP_UNIT_IN) ? "in" : "mm";
+  const char *u_press = "hPa";
+  switch (Settings::get_press_unit()) {
+    case PRESSURE_UNIT_MM_HG: u_press = "mmHg"; break;
+    case PRESSURE_UNIT_IN_HG: u_press = "inHg"; break;
+    case PRESSURE_UNIT_HPA:
+    default:                  u_press = "hPa";  break;
+  }
+
+  char resp[256];
+  snprintf(resp, sizeof(resp),
+           "{\"status\":\"ok\",\"temp_id\":%d,\"wind_id\":%d,\"precip_id\":%d,\"press_id\":%d,"
+           "\"temp\":\"%s\",\"wind\":\"%s\",\"precip\":\"%s\",\"press\":\"%s\"}",
+           (int)Settings::get_temp_unit(),
+           (int)Settings::get_wind_speed_unit(),
+           (int)Settings::get_precip_unit(),
+           (int)Settings::get_press_unit(),
+           u_temp, u_wind, u_precip, u_press);
+
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_sendstr(req, resp);
+  return ESP_OK;
+}
+
 esp_err_t start() {
   if (_server_handle != NULL) {
     return ESP_OK;
@@ -11797,6 +14120,18 @@ esp_err_t start() {
                                .user_ctx = NULL};
   httpd_register_uri_handler(_server_handle, &uri_sd_format);
 
+  httpd_uri_t uri_sd_eject = {.uri = "/sd/eject",
+                              .method = HTTP_POST,
+                              .handler = post_sd_eject_handler,
+                              .user_ctx = NULL};
+  httpd_register_uri_handler(_server_handle, &uri_sd_eject);
+
+  httpd_uri_t uri_sd_mount = {.uri = "/sd/mount",
+                              .method = HTTP_POST,
+                              .handler = post_sd_mount_handler,
+                              .user_ctx = NULL};
+  httpd_register_uri_handler(_server_handle, &uri_sd_mount);
+
   httpd_uri_t uri_sd_diagnose = {.uri = "/sd/diagnose",
                                  .method = HTTP_GET,
                                  .handler = get_sd_diagnose_handler,
@@ -11899,6 +14234,24 @@ esp_err_t start() {
                                          .handler = weather_policy_handler,
                                          .user_ctx = NULL};
   httpd_register_uri_handler(_server_handle, &uri_weather_policy_post);
+
+  httpd_uri_t uri_set_units_post = {.uri = "/set_units",
+                                    .method = HTTP_POST,
+                                    .handler = units_config_handler,
+                                    .user_ctx = NULL};
+  httpd_register_uri_handler(_server_handle, &uri_set_units_post);
+
+  httpd_uri_t uri_api_units_get = {.uri = "/api/v1/units",
+                                   .method = HTTP_GET,
+                                   .handler = units_config_handler,
+                                   .user_ctx = NULL};
+  httpd_register_uri_handler(_server_handle, &uri_api_units_get);
+
+  httpd_uri_t uri_api_units_post = {.uri = "/api/v1/units",
+                                    .method = HTTP_POST,
+                                    .handler = units_config_handler,
+                                    .user_ctx = NULL};
+  httpd_register_uri_handler(_server_handle, &uri_api_units_post);
 
   httpd_uri_t uri_api_info = {.uri = "/api/v1/info",
                               .method = HTTP_GET,

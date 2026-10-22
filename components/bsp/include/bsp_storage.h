@@ -7,11 +7,38 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct {
+    bool mounted;
+    bool present;
+    bool unusable;
+    bool formatting;
+    uint8_t format_progress;
+    double capacity_gb;
+    char fs_type[32];
+    char reason[160];
+} bsp_sdcard_status_info_t;
+
+/**
+ * @brief Get last known SD card status and usability info
+ *
+ * @param out_info Pointer to structure to populate
+ */
+void bsp_sdcard_get_status_info(bsp_sdcard_status_info_t *out_info);
+
+/**
+ * @brief Check if an SD card is physically inserted in the slot (via IO expander SD_DET pin)
+ *
+ * @return true if card is physically inserted (SD_DET == 0), false otherwise
+ */
+bool bsp_sdcard_is_inserted(void);
 
 /**
  * @brief Init SD crad

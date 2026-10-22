@@ -2,6 +2,159 @@
 
 All notable changes to the WG1200 firmware to support D1, D2 and future screenless gateway (**WG1400**) running in conjunction with MeshCore KISS modem firmware.
 
+## [0.8.37] - 2026-10-22
+
+### Highlights & Summary of New Features (v0.8.28 – v0.8.37)
+- **Interactive Historical Weather Trends & Hourly Wind Ribbon (`v0.8.31`, `v0.8.33`):** Overhauled the 24-hour **Historical Weather Trends** dashboard and the **SD Card CSV Viewer (`/sd/view`)** with glassmorphic chart cards, speed-weighted circular vector mean **Hourly Prevailing Wind Direction Ribbons**, **Feels Like** & **Dew Point** series, cumulative + rate dual-axis precipitation charts, color-coded summary badges (`Min / Avg / Max`, `Peak Gust`, `Prevailing Wind`, `3h Pressure Trend`, `Total Rain & Wet Time`), single-line tabular legends, and synchronized crosshairs & drag-to-zoom across all four charts.
+- **Bidirectional LCD ↔ Web UI Display Units Sync (`v0.8.29`, `v0.8.32`):** Added live two-way synchronization of measurement units (`°C`/`°F`, `m/s`/`km/h`/`mph`/`ft/s`/`bft`/`kn`, `mm`/`in`, `hPa`/`mmHg`/`inHg`) between the WG1200 touchscreen LCD and the local Web UI (`POST /set_units`, `GET/POST /api/v1/units`), automatically rescaling live LCD sparklines, dashboard cards, historical charts, and the SD CSV viewer in real time.
+- **Zero-Wear `RTC_NOINIT_ATTR` Retention & Flash / NVS Wear Protection (`v0.8.29`, `v0.8.34`, `v0.8.37`):** Moved primary retention of daily rainfall baselines and daily min/max weather extremes into CRC32-protected `RTC_NOINIT_ATTR` SRAM with 24-hour SD CSV boot hydration and throttled 6-hour / midnight NVS checkpoints, added delta-only `Settings::commit_safe()` NVS writes, retained active LCD tab selection in `RTC_NOINIT_ATTR`, deduplicated `BootGuard` and station ownership NVS writes, and guarded PSRAM-stacked tasks from triggering flash cache operations—reducing routine NVS flash wear by >98%.
+- **Safe microSD Eject / Mount, Hardware Auto-Remount & SPI Reliability (`v0.8.28`–`v0.8.30`, `v0.8.35`, `v0.8.36`):** Added Web UI (`POST /sd/eject`, `POST /sd/mount`) and LCD alert controls for safe microSD removal with automatic hardware insertion detection (`EXPANDER_IO_SD_DET`) and remounting, raw SPI Sector 0 / MBR / FAT VBR pre-inspection to flag unformatted/unusable cards without triggering `esp_vfs_select` panics, hardened SPI bus isolation and `ACMD41` recovery with command-level diagnostics (`/sd/diagnose`), and added capacity-based dynamic formatting ETA (`~4.2s/GB`) with animated progress tracking.
+- **OTA Mutual Exclusion, Wi-Fi / DNS Hardening & Internal DRAM Headroom (`v0.8.28`, `v0.8.37`):** Added a shared FreeRTOS mutex coordinating Cloud and Web UI OTA updates with continuous `SoftWatchdog` feeding and partition identity checks, moved `dns_resolve_task` and `sd_writer_task` stacks to PSRAM (`EXT_RAM_BSS_ATTR`) to free internal DRAM for TLS/Wi-Fi, expanded the Wi-Fi manager queue depth, upgraded `espressif/mqtt` (`~1.1.0`) and `joltwallet/littlefs` (`~1.22.3`), modernized ESP-IDF 6.0 Kconfig symbols, and reduced RF station discovery scan dwell times (~48 min down to ~11 min).
+
+### Fixed & Hardened — OTA, Wi-Fi Stability, Watchdog, DRAM & Flash Wear Protection
+- **OTA Mutual Exclusion, SoftWatchdog Liveness & Partition Identity Safety (`submit.h`, `submit.cpp`, `web_server.cpp`, `recovery_mode.cpp`):**
+  - Added a shared static FreeRTOS mutex (`Submit::try_lock_ota()` / `Submit::unlock_ota()`) coordinating Cloud OTA (`Submit::handle_ota()`) and Web UI OTA (`post_ota_handler()`), preventing concurrent `esp_ota_begin` / flash writes to the target OTA partition.
+  - Added `SoftWatchdog::feed(&_swd_handle)` inside the 4 MB flash read loop of `sha256_of_partition()`, across `handle_ota()` (`esp_ota_begin` flash erase, chunk writes, `esp_ota_end`, SHA-256 verification), and across `submit_task()` telemetry/attribute cycles so slow links or flash erases cannot trigger a premature 90s `SoftWatchdog` reset.
+  - Stopped `SoftWatchdog` before graceful OTA and remote reboots so `BootGuard` never misclassifies a completed update or remote reboot as a crash boot.
+  - Fixed `handle_ota()` to return `RET_ERROR` when `esp_partition_check_identity()` detects the downloaded image is identical to the running partition instead of switching boot slots and rebooting.
+  - Deferred `last_ota_check_ms` and `last_rs_check_ms` timestamp updates until after the ThingsBoard attribute response is received and parsed so transient MQTT timeouts retry on the next 20s cycle rather than waiting 5–60 minutes.
+  - Bounded `HTTPD_SOCK_ERR_TIMEOUT` retries in `post_ota_handler()` (`MAX_TIMEOUT_RETRIES = 3`) so a dropped browser upload aborts cleanly and releases the OTA lock.
+  - Replaced `esp_partition_find()` in `RecoveryMode::factory_app_valid()` with `esp_partition_find_first()` to eliminate an iterator heap leak.
+- **Wi-Fi Manager Queue Depth, Persistent PSRAM DNS Worker & Graceful Disconnect (`wifi.cpp`, `utils.cpp`):**
+  - Replaced per-check dynamic `xTaskCreate(dns_resolve_task)` / `vTaskDelete(NULL)` every 120 seconds with a single persistent static task (`xTaskCreateStatic`) using a PSRAM stack (`EXT_RAM_BSS_ATTR`), eliminating internal heap churn and idle-task TCB cleanup overhead.
+  - Increased `Wifi::_manager_queue` depth from 3 to 16 messages so bursts of Wi-Fi / IP / scan events cannot drop state transitions.
+  - Fixed `Utils::restart()` to call `Wifi::wait_disconnected(2000)` instead of `wait_connected(2000)` before `esp_restart()`.
+- **Internal DRAM Headroom & SD Card Thread Safety (`weather_logger.cpp`):**
+  - Moved the 12 KB `sd_writer_task` stack to PSRAM (`EXT_RAM_BSS_ATTR`), freeing 12 KB of internal DRAM for mbedTLS / Wi-Fi / LwIP buffers during concurrent HTTPS OTA and Web UI traffic.
+  - Updated `append_csv_once()` to set `s_sd_next_mount_tick_sec` backoff when unmounting on `ENODEV`/`EIO` and synchronized `s_sd_ejected = true` under `s_mutex` inside `bsp_spi_lock()` in `eject_sd()`.
+- **BootGuard & Flash / NVS Wear Protection (`boot_guard.cpp`, `submit.cpp`, `settings.cpp`, `const.h`, `ws_data.cpp`, `ws_gps.cpp`, `ws_handler.cpp`):**
+  - Called `BootGuard::mark_healthy()` upon verified ThingsBoard connectivity in `submit_task()` and made `BootGuard::mark_healthy()` idempotent per boot once any pending rollback record is reported.
+  - Persisted cloud-assigned `dev_name` (`NVS_SETTINGS_KEY_DEV_NAME`) in `Settings::load()` and `Settings::commit_safe()` so gateways retain their device name across reboots and do not trigger a spurious `Settings::commit()` on every boot when ThingsBoard shared attributes arrive.
+  - Preserved existing `station_ownership_timestamp` in `ws_handler.cpp` when boot-time GPS ownership re-verification confirms an already-verified station ID, eliminating a redundant NVS write (`own_ts`) on the first station packet of every boot.
+  - Guarded `WsData::save_daily_state_to_nvs()` with `esp_ptr_internal()` so read-path getters (`get_daily_precip()`, `get_daily_extremes()`) called from PSRAM-stacked tasks (`ui_update_task`, `sd_writer_task`) only update `RTC_NOINIT_ATTR` SRAM and defer NVS flash commits to internal-RAM tasks, preventing `esp_task_stack_is_sane_cache_disabled` aborts and unifying midnight day rollover into a single NVS checkpoint.
+  - Restricted GPS longitude timezone auto-seeding (`maybe_seed_tz_from_gps()`) to run once on paired-station GPS fixes when `tz_offset` is still at default `0`, preventing sniffed foreign packets, manual user timezone overrides (e.g. DST), or longitude boundary jitter (`7.5° + 15°*k`) from repeatedly writing to NVS.
+
+## [0.8.36] - 2026-10-20
+
+### Added & SD Card Safe Eject / LCD Reminder (`bsp_sdcard.c`, `weather_logger.cpp`, `state_sniffer.cpp`, `ui_view_alert.cpp`, `web_server.cpp`)
+- **Safe microSD Eject / Mount & Hardware Removal/Insertion Auto-Recovery (`bsp_storage.h`, `bsp_sdcard.c`, `weather_logger.h`, `weather_logger.cpp`):**
+  - Added `bsp_sdcard_is_inserted()` to read the active-low `EXPANDER_IO_SD_DET` pin on the TCA9535 I2C IO expander without probing the shared SPI bus, and updated `bsp_sdcard_deinit()` to unmount `/sdcard`, deassert `EXPANDER_IO_SD_CS` (`HIGH`), and update `s_card_status` to `"Ejected (safe to remove)"`.
+  - Implemented `WeatherLogger::eject_sd()` and `WeatherLogger::mount_sd()` with `SdLoggerStatus::ejected` tracking. While ejected, background SD CSV writes and SPI probes are paused while in-RAM 24h weather history and daily metadata continue accumulating so queued records are flushed once remounted.
+  - Updated `sd_writer_task()` to poll `bsp_sdcard_is_inserted()` while unmounted so physically removing (`SD_DET` HIGH) and re-inserting (`SD_DET` LOW) a card automatically exits the ejected state (or mount backoff) and remounts `/sdcard`.
+- **LCD Ejected Alert Popup with "Mount SD" Action Button & 60s Reminder (`ui_view_alert.h`, `ui_view_alert.cpp`, `state_sniffer.cpp`):**
+  - Added an optional action button (`UiViewAlert::View::action_btn()`) to the LCD alert view and fixed `_button_close_event_cb()` to record `UiCommon::get_seconds_count()` so `is_time_to_show()` re-triggers reliably.
+  - Updated `StateSniffer::update_warning_content()` to wake the LCD backlight and display a **"SD Card Ready to Eject"** (or **"SD Card Ejected"** once physically removed) popup with a **"Mount SD"** button, re-waking the screen every 60 seconds if dismissed with `X` while still ejected, and hiding automatically once remounted.
+- **Web UI Eject / Mount Controls & Dashboard Warning Banner (`web_server.cpp`):**
+  - Added `POST /sd/eject` and `POST /sd/mount` endpoints, exposed `ejected` in `/sd/status` and `sd_ejected` in `/status`, and prevented `/sd/diagnose` from probing the SPI bus while ejected.
+  - Added **Eject SD Card** and **Mount SD Card** buttons in the SD Card Management panel and a persistent top warning banner when the card is left in the ejected state.
+
+## [0.8.35] - 2026-10-20
+
+### Fixed & SD Card Hardware Diagnostics (`bsp_sdcard.c`, `web_server.cpp`, `weather_logger.cpp`)
+- **WG1200 v1.1 Hardware-Verified SD SPI Initialization, Continuous DMA Clocking & Bus Isolation (`bsp_sdcard.c`):**
+  - Verified against WG1200 v1.1 hardware specifications: `SPI_CS` (SD Card CS) is on TCA9535 `U7` (`0x20`) `P0_2` (bit 2), `SD_DET` is on `P1_4` (bit 12, active-low with `R43` 10k pull-up), `SPI_CS_RA` (SX1262 NSS) is on `P0_0` (bit 0), and `ESP32_CS` (LCD CS) is on `P0_4` (bit 4). Kept `v0.8.28` behavior intact for normal SD cards while hardening SPI entry and recovery.
+  - Hooked `host.do_transaction` (`bsp_sdcard_do_transaction`) to isolate `P0_0` and `P0_4` HIGH, hold `P0_2` (`SD_CS`) HIGH during the `CMD0` power-up clockout (`>= 74` clocks per SD Physical Layer Spec Section 6.4.1.1), and assert `P0_2` LOW for `CMD0` (`SCF_RSP_R1`) and subsequent transfers.
+  - Filtered out SDIO-only probe commands (`CMD52` `SD_IO_RW_DIRECT` and `CMD5` `SD_IO_SEND_OP_COND`) before they reach the microSD slot so strict SPI-mode SDXC controllers never latch `ILLEGAL_COMMAND` (`0x05`) prior to `ACMD41`.
+  - Added continuous 512-byte DMA `0xFF` clocking (`bsp_sdcard_clock_ff` with `DRAM_ATTR` buffer) and a multi-stage raw SPI handshake (`CMD0` -> `CMD8(0x1AA)` -> `CMD58` -> `CMD55` + `ACMD41` with CS-framed and CS-held-LOW modes) if standard `v0.8.28` `ACMD41` polling does not clear `IN_IDLE_STATE` (`0x01`) within 30 polls, followed by fast timeout termination so unresponsive cards fail in ~4s instead of 30s.
+  - Enabled internal pull-ups on `GPIO_SDSPI_MISO` (GPIO 47), `GPIO_SDSPI_MOSI` (GPIO 48), and `GPIO_SDSPI_SCLK` (GPIO 41) in `bsp_sdcard_ensure_spi_bus()`.
+- **Hardware Card Detect (`EXPANDER_IO_SD_DET`), SPI Telemetry & Non-Blocking `/sd/diagnose` (`bsp_sdcard.c`, `web_server.cpp`, `weather_logger.cpp`):**
+  - Read TCA9535 `EXPANDER_IO_SD_DET` (`P1_4`, bit 12) and recorded command-level SPI telemetry (`CMD0` R1, `CMD8` R7, `CMD58` OCR, `CMD55` R1, `ACMD41` R1/arg/count, raw recovery stage, and post-`ACMD41` CRC/status verification) in `/sd/diagnose` and `/sd/status`.
+  - Explicitly distinguish cards that respond to SPI commands (`CMD0=0x01`, `CMD8=0x1AA`, `OCR=0x00FF8000`) but whose internal NAND/FTL controller stays stuck in `IN_IDLE_STATE` (`0x01`) on `ACMD41` (`"Card Busy (ACMD41)"`) from physical missing-card or SPI bus errors.
+  - Removed the redundant `WeatherLogger::request_sd_probe()` trigger inside `GET /sd/diagnose` so opening the Web UI diagnostics tab does not queue a duplicate background `sd_writer_task` mount probe that blocked `POST /sd/format`.
+
+## [0.8.34] - 2026-10-18
+
+### Fixed & Flash Wear Protection
+- **Zero-Wear `RTC_NOINIT_ATTR` Primary Retention & Throttled NVS Checkpoints for Daily Weather State (`ws_data.cpp`):**
+  - Moved primary persistence of `PersistedDailyState` (daily rainfall baseline, rollover accumulator, cached daily total, and daily min/max extremes) into CRC32-protected `RTC_NOINIT_ATTR` SRAM (`_rtc_daily_cache`). All 20s weather packets, rain bucket tips (`>= 0.01 mm`), and 5-minute extreme updates are now retained across warm reboots, OTA updates, and USB flashes with **zero internal NOR flash wear**.
+  - Restricted NVS `"wx_daily"` blob writes to rare cold-power-loss checkpoints only: midnight day-rollover / initial `00:00` baseline establishment, station counter wrap, manual reset, or at most once every 6 hours (`NVS_DAILY_CHECKPOINT_INTERVAL_SEC = 21600`) when state bytes actually differ (`memcmp`) from the last NVS-committed snapshot, cutting NVS flash wear by >98%.
+- **Delta-Only NVS Settings Commits & Zero-Wear LCD Tab Retention (`settings.cpp`):**
+  - Added a shadow copy of NVS-synced settings (`_nvs_synced_settings`) in `Settings::commit_safe()` so runtime settings commits only call `nvs_set_*` / `nvs_set_blob` on the specific keys that actually changed rather than rewriting all 42 keys/blobs on every commit.
+  - Retained the active LCD tab index (`last_tab`) in `RTC_NOINIT_ATTR` SRAM (`_rtc_last_tab_cache`) so switching tabs on the WG1200 touchscreen no longer triggers NVS flash commits.
+- **Boot Guard NVS Write Deduplication (`boot_guard.cpp`):**
+  - Updated `BootGuard::init()` to skip calling `nvs_set_u8(NVS_KEY_CRASH_CNT)` and `nvs_commit()` on normal boots when `crash_cnt` is already `0` in NVS and no soft-watchdog flag is set.
+
+## [0.8.33] - 2026-10-18
+
+### Added & Web UI Improvements
+- **SD Card CSV Viewer Overhaul (`web_server.cpp`):**
+  - Upgraded `/sd/view` (`g_sd_csv_viewer_html`) for stored weather CSV files (`history_v1_*.csv`) to match the new **Historical Weather Trends** dashboard look and interactive capabilities:
+    - **Glassmorphic Chart Cards & Summary Pills:** Added `.hist-card-header`, `.hist-stats-strip`, and color-coded `.hist-stat-pill` badges (`Min / Avg / Max`, `Feels`, `Hum`, `Peak Gust`, speed-weighted circular mean `Prevailing` wind arrow + cardinal direction, `3h Pressure Trend` arrow, `Solar Peak / Avg`, `Dew Pt`, `Total Rain`, `Peak Rate`, and `Wet Time`).
+    - **Hourly Prevailing Wind Ribbon:** Added the top canvas wind direction ribbon (`drawWindDirectionRibbon`) with vector-weighted circular mean flow arrows + 16-point cardinal labels (`N`, `NNE`, `SW`, etc.) and right-axis `N / E / S / W` scatter points.
+    - **Precipitation Rate & Cumulative Total:** Plotted running cumulative precipitation alongside precipitation rate on dual Y-axes.
+    - **Connected Crosshair & Synchronized Zoom:** Linked all four CSV charts via `uPlot.sync('csvWeather')` with synchronized X-axis drag-to-zoom (`syncCsvScaleX`), double-click reset, topbar **Reset Zoom** button, and **Crosshair & Zoom Linked** badge.
+    - **Single-Line Tabular Legends:** Applied fixed-height (`26px`), non-wrapping `.u-legend` rules with compact `MM/DD HH:MM` timestamps so hovering never wraps or shifts chart layouts.
+    - **Gateway / LCD Display Units Sync:** Automatically fetches `/api/v1/units` when viewing stored CSV files and converts all chart series, axes, and summary pills to the active gateway/LCD display units (`°C`/`°F`, `m/s`/`km/h`/`mph`/`ft/s`/`bft`/`kn`, `mm`/`in`, `hPa`/`mmHg`/`inHg`).
+
+## [0.8.32] - 2026-10-17
+
+### Added & Web UI / LCD Improvements
+- **Bidirectional Display Units Sync Between LCD and Web UI (`web_server.cpp`, `state_sniffer.cpp`, `state_sniffer.h`, `ui_types.cpp`, `dashboard_html_gz.h`):**
+  - **Web UI Display Units Config:** Added a **Display Units (Web & LCD Sync)** section in the Web UI Settings tab (`Temperature`: `°C` / `°F`; `Wind Speed`: `m/s`, `km/h`, `mph`, `ft/s`, `bft`, `kn`; `Precipitation`: `mm` / `in`; `Pressure`: `hPa`, `mmHg`, `inHg`) backed by `POST /set_units` and `GET/POST /api/v1/units`.
+  - **Web -> LCD Live Synchronization:** Changing any display unit on the Web UI persists the setting to NVS (`Settings::commit()`) and dispatches `StateSniffer::publish_ws_content_update()`, which updates the LCD Settings dropdowns (`_dd_units_*`), weather tiles, onboard barometer reading, and immediately rescales LCD sparkline chart ranges and min/mid/max labels (`TempDualTile::temp()`, `WindDualTile::units()`).
+  - **LCD -> Web UI Live Synchronization:** Exposed top-level `units` metadata (`temp_id`, `wind_id`, `precip_id`, `press_id`, `temp`, `wind`, `precip`, `press`) in `/status`. When units are changed on the LCD touchscreen, the Web UI automatically updates its unit selectors, dashboard weather cards (including onboard Barometer card conversion), Live Weather Trends chart, and all four Historical Weather Trends charts and summary pills.
+
+## [0.8.31] - 2026-10-17
+
+### Added & Web UI Improvements
+- **Historical Weather Trends Overhaul (`web_server.cpp`, `dashboard_html_gz.h`):**
+  - **Hourly Prevailing Wind Ribbon:** Added a top canvas ribbon on the **Wind Trends** chart that groups wind samples into hourly (and zoom-adaptive) buckets using speed-weighted circular vector averaging (`atan2`), rendering directional flow arrows paired with 16-point cardinal labels (`N`, `NNW`, `SW`, etc.) and cardinal right-axis ticks (`N / E / S / W`).
+  - **Feels Like & Dew Point Series:** Added **Feels Like (`°C`)** (Wind Chill / Rothfusz Heat Index) to the **Temperature & Humidity** chart and **Dew Point (`°C`)** (Magnus formula) to the **Atmospheric & Solar** chart, including in the SD Card CSV Viewer.
+  - **Synchronized Crosshair & Zoom:** Connected all four historical charts via `uPlot.sync("histWeather")` for synchronized hover crosshairs, live readouts, and drag-to-zoom / double-click reset across all metrics.
+  - **Min / Avg / Max Summary Badges:** Added color-coded summary pills (`Min / Avg / Max`, `Peak Gust`, `24h Prevailing Wind`, `3h Pressure Trend`, `24h Rain Total & Wet Time`) to the header of every chart card.
+  - **Non-Wrapping Tabular Legends:** Locked `.u-legend` to a single-row flex layout with `font-variant-numeric: tabular-nums`, reserved value widths (`ch`), and compact timestamps so hovering never expands or wraps legend labels onto multiple lines.
+
+## [0.8.30] - 2026-10-17
+
+### Fixed & Stability
+- **Deterministic `LoadProhibited` Panic in `esp_vfs_select` on Unformatted/Unusable SD Cards (`bsp_sdcard.c`, `bsp_storage.h`, `weather_logger.cpp`, `weather_logger.h`, `vfs_calls.c`):**
+  - Eliminated the race between `esp_vfs_fat_sdspi_mount()` registering and immediately unregistering a transient `s_vfs[]` slot upon `FR_NO_FILESYSTEM (13)` while `esp_mqtt_task` concurrently polls TLS sockets via `esp_vfs_select()`.
+  - Added raw SPI Sector 0 / MBR / FAT VBR pre-inspection (`bsp_sdcard_inspect_card()`) before calling `esp_vfs_fat_sdspi_mount()` when `format_if_mount_failed == false`. Unformatted/blank cards, exFAT/NTFS (`0x07`), Linux ext2/3/4 (`0x83`), GPT (`0xEE`), or cards with invalid FAT boot sectors are detected cleanly in raw SPI mode without touching `s_vfs[]`.
+  - Marked inserted but unformatted/unsupported SD cards as `unusable` (`ESP_ERR_INVALID_STATE`) and suppressed background mount retry loops until the user formats the card from the Web UI or swaps the card.
+  - Guarded `spi_bus_initialize()` with `s_spi_bus_initialized` so the shared SPI2 bus is initialized exactly once, and added `bsp_sdcard_raw_deinit()` (`spi_bus_remove_device(dev_handle)`) to prevent SPI device slot leaks during raw card probes and formatting.
+  - Removed overlapping `WeatherLogger::request_sd_probe()` triggers from `/history` and `/sd/status` HTTP handlers, and consolidated mount backoff state in `WeatherLogger`.
+  - Added defensive `vfs != NULL` guards inside `esp_vfs_select()` in ESP-IDF (`components/vfs/vfs_calls.c`).
+- **Web UI Unformatted / Unusable SD Card Alerting (`web_server.cpp`):**
+  - Exposed `sd_mounted`, `sd_present`, `sd_unusable`, `sd_capacity_gb`, `sd_fs_type`, and `sd_status_reason` in `/status`, `/sd/status`, and `/sd/diagnose`.
+  - Added a persistent top-level warning banner (`#sd-unusable-banner`) and detailed status/action prompts in **Connections -> SD Card Storage** whenever an unformatted or unsupported microSD card is inserted, guiding the user to click **Format SD Card** while gateway operation continues uninterrupted.
+
+## [0.8.29] - 2026-10-17
+
+### Fixed & Stability
+- **Daily Precipitation & Daily Extremes NVS Persistence (`ws_data.cpp`, `ws_handler.cpp`):**
+  - Persisted daily rain baseline (`_daily_baseline_cml`), rollover accumulator (`_daily_accum_rollover`), cached daily precipitation (`_daily_precip_cached`), and daily extremes (`DailyExtremes`) in NVS (`settings` / `wx_daily`), bound to the paired station ID and local day index (`Settings::get_tz_offset()`).
+  - Preserved pre-NTP rain baselines across NTP time synchronization and recovered midnight rain baselines when booting on a new day from yesterday's persisted station counter.
+  - Restricted `WsData::update_precip_rate_params()` to validated, paired, non-foreign telemetry packets so corrupted RF packets (`bad_values_detected`) cannot poison rain rate or daily rain baselines.
+- **24-Hour Log SD Card Hydration (`weather_logger.h`, `weather_logger.cpp`):**
+  - Added automatic boot-time hydration (`hydrate_aggregates_from_sd()`) of the 24-hour 5-minute aggregate buffer (`s_aggregates`) from yesterday's and today's `/sdcard/history_v1_YYYY_MM_DD.csv` files once system time is valid, immediately refreshing the LCD and reconciling `get_daily_precip()` and `get_daily_extremes()`.
+  - Initialized `s_last_precip_cml` from pre-NTP packets so rain tips in the first 5-minute window after boot are captured.
+  - Added `uv_max` tracking to `WeatherAggregate`.
+- **LCD Live Charts & Web Dashboard (`ui_types.h`, `ui_types.cpp`, `web_server.cpp`):**
+  - Added in-place history conversion when switching temperature (`°C` / `°F`) or wind speed units (`m/s`, `km/h`, `mi/h`, `kn`, `ft/s`, `bft`) on `TempDualTile` and `WindDualTile` 40-minute live LCD charts.
+  - Added `Daily: X.XX mm/in` (`#w-precip-daily`) sub-label to the main Web Dashboard `Precip Rate` card.
+
+## [0.8.28] - 2026-09-27
+
+### Added & Architecture
+- **Dynamic SD Card Formatting ETA & Progress Loader (`bsp_sdcard.c`, `web_server.cpp`):**
+  - Added capacity-based dynamic ETA estimation (`~4.2s/GB`) for SD card formatting over the SPI bus, with an animated progress bar and updated LCD format alert timings for cards up to 128 GB.
+- **Toolchain Path Resolution (`tools/upload_signed.py`):**
+  - Enhanced `tools/upload_signed.py` to automatically resolve `esptool.py`, `espsecure`, and Python across isolated and global PlatformIO environments.
+
+### Updated & Dependencies
+- **Managed Components (`idf_component.yml`, `dependencies.lock`):**
+  - Upgraded `espressif/mqtt` to `~1.1.0` (improved TLS connection stability, keepalive management, and memory safety).
+  - Upgraded `joltwallet/littlefs` to `~1.22.3` (power-cut resilience improvements).
+- **Configuration Modernization (`sdkconfig.defaults`):**
+  - Migrated legacy Kconfig symbols to native ESP-IDF 6.0 names (`CONFIG_LIBC_*`, `CONFIG_GPTIMER_ISR_CACHE_SAFE`, `CONFIG_MCPWM_ISR_CACHE_SAFE`, `CONFIG_ESP_BROWNOUT_USE_INTR`, `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM`, etc.).
+  - Purged obsolete deprecated options block, eliminating Kconfig deprecation warning passes.
+
+### Fixed & Stability
+- **RF Scanning & Web Diagnostics (`ws_handler.cpp`, `web_server.cpp`):**
+  - Optimized Pass 2 scan dwell times to 45s (WS1300) and 90s (WS1001), accelerating combo scans (~48 min down to ~11 min).
+  - Enabled sniff packet decoding on alternate channels when manual listen slot is set.
+  - Set unlearned pubkey fallback to `0xFF` in `post_pair_local_handler` to safely bypass ECDSA validation until authentic broadcast packets are received.
+
 ## [0.8.27] - 2026-09-22
 
 ### Added & Architecture

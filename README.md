@@ -8,6 +8,54 @@ This repository contains the open source firmware supporting the **WeatherXM WG1
 * **SD Weather History & Aggregation**: [`docs/sd_weather_storage.md`](docs/sd_weather_storage.md)
 * **Pairing Lifecycle & States**: [`docs/pairing_states.md`](docs/pairing_states.md)
 * **WS1300 Pairing Flow**: [`docs/ws1300_pairing_flow.md`](docs/ws1300_pairing_flow.md)
+* **Release Changelog**: [`CHANGELOG.md`](CHANGELOG.md)
+
+---
+
+## Local Web Console & REST API (`http://<gateway-ip>/`)
+
+Every WG1200 gateway serves a built-in, gzip-compressed local web console (`v0.8.37`) over HTTP with mDNS discovery (`_weatherxm._tcp`), real-time weather charts, microSD history management, bidirectional LCD ↔ Web unit synchronization, Meshtastic / MeshCore mesh configuration, live LoRa packet inspection, and an interactive REST API & `/llms.txt` endpoint for Home Assistant and AI agents.
+
+### Interactive Slideshow
+
+<p align="center">
+  <img src="docs/images/webui_slideshow.svg" alt="WG1200 Local Web Console Slideshow" width="100%">
+</p>
+
+### Web Console Tabs (Click to Open Full Resolution)
+
+| 1. Live Dashboard | 2. 24h History & SD Card | 3. Settings, Mesh & Pairing | 4. Local REST API & `/llms.txt` |
+| :---: | :---: | :---: | :---: |
+| <a href="docs/images/webui_dashboard.png"><img src="docs/images/webui_dashboard.png" alt="Dashboard Tab" width="220"></a> | <a href="docs/images/webui_history.png"><img src="docs/images/webui_history.png" alt="History & SD Card Tab" width="220"></a> | <a href="docs/images/webui_settings.png"><img src="docs/images/webui_settings.png" alt="Settings & Mesh Tab" width="220"></a> | <a href="docs/images/webui_api_docs.png"><img src="docs/images/webui_api_docs.png" alt="API Docs Tab" width="220"></a> |
+| Real-time link telemetry, latest weather cards, daily rain accumulation, and 15-min live multi-axis trends. | 24-hour 5-min historical trends with hourly prevailing wind ribbon, synchronized crosshairs/zoom, and microSD CSV management + safe eject. | System radio controls, Wi-Fi OTA update, bidirectional Web ↔ LCD display units sync, Meshtastic & MeshCore nodes, station pairing, and live LoRa packet sniffer. | Interactive REST API explorer, one-click command execution, Home Assistant YAML generator, and `/llms.txt` agent reference. |
+
+<details>
+<summary><strong>📸 Expand Full-Page Screenshots Inline</strong></summary>
+<br>
+
+#### 1. Dashboard — Live Telemetry & 15-Minute Weather Trends
+<p align="center">
+  <img src="docs/images/webui_dashboard.png" alt="WG1200 Dashboard Tab" width="95%">
+</p>
+
+#### 2. History — 24-Hour Historical Weather Trends, Hourly Wind Ribbon & SD Card Management
+<p align="center">
+  <img src="docs/images/webui_history.png" alt="WG1200 History & SD Card Tab" width="85%">
+</p>
+
+#### 3. Settings — System Connections, Display Units Sync, Meshtastic / MeshCore & Station Pairing
+<p align="center">
+  <img src="docs/images/webui_settings.png" alt="WG1200 Settings & Mesh Tab" width="75%">
+</p>
+
+#### 4. API Docs — Local Gateway HTTP API Reference & `/llms.txt`
+<p align="center">
+  <img src="docs/images/webui_api_docs.png" alt="WG1200 API Docs Tab" width="75%">
+</p>
+
+</details>
+
+---
 
 ## Custom / Community firmware: designed for AI-driven development
 

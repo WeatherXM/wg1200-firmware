@@ -30,17 +30,30 @@ def get_esptool_path():
     return first_existing(
         os.path.join(PLATFORMIO_HOME, "packages", "tool-esptoolpy", "esptool.py"),
         os.path.join(PLATFORMIO_HOME, "packages", "tool-esptoolpy@1.40501.0", "esptool.py"),
+        os.path.expanduser("~/.platformio_wg1200/packages/tool-esptoolpy/esptool.py"),
+        os.path.expanduser("~/.platformio/packages/tool-esptoolpy/esptool.py"),
     )
 
 
 def get_platformio_python():
-    return first_existing(os.path.join(PLATFORMIO_HOME, "penv", "bin", "python"), sys.executable)
+    return first_existing(
+        os.path.join(PLATFORMIO_HOME, "penv", "bin", "python"),
+        os.path.expanduser("~/.platformio_wg1200/penv/.espidf-6.0.1/bin/python"),
+        os.path.expanduser("~/.platformio_wg1200/penv/bin/python"),
+        os.path.expanduser("~/.platformio/penv/bin/python"),
+        sys.executable,
+    )
 
 
 def get_espsecure_path():
     return first_existing(
         os.path.join(PLATFORMIO_HOME, "penv", "bin", "espsecure"),
         os.path.join(PLATFORMIO_HOME, "penv", "bin", "espsecure.py"),
+        os.path.expanduser("~/.platformio_wg1200/penv/.espidf-6.0.1/bin/espsecure"),
+        os.path.expanduser("~/.platformio_wg1200/penv/.espidf-6.0.1/bin/espsecure.py"),
+        os.path.expanduser("~/.platformio_wg1200/penv/bin/espsecure"),
+        os.path.expanduser("~/.platformio/penv/bin/espsecure"),
+        os.path.expanduser("~/.platformio/penv/bin/espsecure.py"),
     )
 
 

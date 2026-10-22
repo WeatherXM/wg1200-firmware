@@ -355,6 +355,7 @@ class TempDualTile : public UiTypes::ContainerBase<TempDualTile>
 	float _temp_history[120];
 	float _feels_like_history[120];
 	bool _has_history;
+	bool _is_fahrenheit;
 
 	void tick_chart();
 	static void timer_cb(lv_timer_t *timer);

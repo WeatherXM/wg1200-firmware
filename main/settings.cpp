@@ -12,6 +12,7 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_attr.h"
 #include "string.h"
 
 #include "freertos/FreeRTOS.h"
@@ -41,6 +42,21 @@ namespace Settings
 
 	/** Current settings loaded from NVS on init. */
 	Data _current_settings = {};
+
+	/** Shadow copy of settings currently synced to NVS, used for delta-only commits. */
+	static Data _nvs_synced_settings = {};
+	static bool _nvs_synced_valid = false;
+
+	/** Retain active LCD tab index in RTC_NOINIT_ATTR SRAM across warm reboots/OTA/USB flashes
+	 *  so browsing tabs on the LCD never wears NVS flash. */
+	static constexpr uint32_t RTC_LAST_TAB_MAGIC = 0x4C544142U; // "LTAB"
+	struct RtcLastTabCache
+	{
+		uint32_t magic;
+		uint32_t last_tab;
+		uint32_t inv_last_tab;
+	};
+	static RTC_NOINIT_ATTR RtcLastTabCache _rtc_last_tab_cache;
 
 	/** Commit task handle */
 	static TaskHandle_t _commit_task_handle = NULL;
@@ -212,10 +228,19 @@ namespace Settings
 		ESP_ERROR_CHECK_WITHOUT_ABORT(esp_ret);
 		if (esp_ret == ESP_ERR_NVS_NOT_FOUND) needs_commit = true;
 
-		// Last on screen tab
-		esp_ret = nvs_get_u32(nvs_handle, NVS_SETTINGS_LAST_TAB, (u32*)&_current_settings.last_tab);
-		ESP_ERROR_CHECK_WITHOUT_ABORT(esp_ret);
-		if (esp_ret == ESP_ERR_NVS_NOT_FOUND) needs_commit = true;
+		// Last on screen tab (retained in RTC_NOINIT_ATTR across warm resets; optional NVS fallback)
+		if (_rtc_last_tab_cache.magic == RTC_LAST_TAB_MAGIC &&
+			_rtc_last_tab_cache.last_tab == ~_rtc_last_tab_cache.inv_last_tab) {
+			_current_settings.last_tab = _rtc_last_tab_cache.last_tab;
+		} else {
+			u32 nvs_last_tab = _current_settings.last_tab;
+			if (nvs_get_u32(nvs_handle, NVS_SETTINGS_LAST_TAB, &nvs_last_tab) == ESP_OK) {
+				_current_settings.last_tab = nvs_last_tab;
+			}
+			_rtc_last_tab_cache.magic = RTC_LAST_TAB_MAGIC;
+			_rtc_last_tab_cache.last_tab = _current_settings.last_tab;
+			_rtc_last_tab_cache.inv_last_tab = ~_current_settings.last_tab;
+		}
 
 		// Weather station ID
 		esp_ret = nvs_get_i64(nvs_handle, NVS_SETTINGS_WS_ID, (int64_t*)&_current_settings.ws_id);
@@ -704,6 +729,14 @@ namespace Settings
 			needs_commit = true;
 		}
 
+		// Cloud-assigned device name (optional in NVS until first ThingsBoard sync)
+		size_t dev_name_len = sizeof(_current_settings.dev_name);
+		if (nvs_get_blob(nvs_handle, NVS_SETTINGS_KEY_DEV_NAME, _current_settings.dev_name, &dev_name_len) == ESP_OK) {
+			_current_settings.dev_name[sizeof(_current_settings.dev_name) - 1] = '\0';
+		} else {
+			memset(_current_settings.dev_name, 0, sizeof(_current_settings.dev_name));
+		}
+
 		// Interval migrations:
 		// 1) 600s legacy default -> 3600s hourly heartbeat
 		// 2) 60s or 120s aggressive intervals -> 300s (5min minimum)
@@ -762,6 +795,8 @@ namespace Settings
 				return RET_ERROR;
 			}
 		} else {
+			_nvs_synced_settings = _current_settings;
+			_nvs_synced_valid = true;
 			ESP_LOGI(TAG, "All configuration keys loaded from NVS. Skipping redundant boot write.");
 		}
 
@@ -1046,11 +1081,10 @@ namespace Settings
 	******************************************************************************/
 	RetResult set_last_tab(uint32_t _last_tab)
 	{
-		if(_current_settings.last_tab != _last_tab)
-		{
-			_current_settings.last_tab = _last_tab;
-			_changed_categories |= (u32) Category::SYSTEM;
-		}
+		_current_settings.last_tab = _last_tab;
+		_rtc_last_tab_cache.magic = RTC_LAST_TAB_MAGIC;
+		_rtc_last_tab_cache.last_tab = _last_tab;
+		_rtc_last_tab_cache.inv_last_tab = ~_last_tab;
 
 		return RET_OK;
 	}
@@ -1623,125 +1657,198 @@ namespace Settings
 			return RET_ERROR;
 		}
 
+		uint32_t dirty_keys = 0;
 		auto persist = [&](esp_err_t result, const char *key) -> bool {
-			if(result == ESP_OK) return true;
+			if(result == ESP_OK) {
+				dirty_keys++;
+				return true;
+			}
 			ESP_LOGE(TAG, "Failed to persist settings key '%s': %s", key, esp_err_to_name(result));
 			return false;
 		};
 
+		const bool full_sync = !_nvs_synced_valid;
+		const Data &prev = _nvs_synced_settings;
+
 		// Freq name
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_FREQ_ID, (u32)_current_settings.freq_region), NVS_SETTINGS_KEY_FREQ_ID)) goto commit_failed;
+		if(full_sync || _current_settings.freq_region != prev.freq_region)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_FREQ_ID, (u32)_current_settings.freq_region), NVS_SETTINGS_KEY_FREQ_ID)) goto commit_failed;
 
 		// Temperature unit
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_TEMP_UNIT, _current_settings.temp_unit), NVS_SETTINGS_KEY_TEMP_UNIT)) goto commit_failed;
+		if(full_sync || _current_settings.temp_unit != prev.temp_unit)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_TEMP_UNIT, _current_settings.temp_unit), NVS_SETTINGS_KEY_TEMP_UNIT)) goto commit_failed;
 
 		// Timezone
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_TZ_OFFSET, _current_settings.tz_offset), NVS_SETTINGS_KEY_TZ_OFFSET)) goto commit_failed;
+		if(full_sync || _current_settings.tz_offset != prev.tz_offset)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_TZ_OFFSET, _current_settings.tz_offset), NVS_SETTINGS_KEY_TZ_OFFSET)) goto commit_failed;
 
 		// Wind speed unit
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_WIND_SPEED_UNIT, _current_settings.wind_speed_unit), NVS_SETTINGS_KEY_WIND_SPEED_UNIT)) goto commit_failed;
+		if(full_sync || _current_settings.wind_speed_unit != prev.wind_speed_unit)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_WIND_SPEED_UNIT, _current_settings.wind_speed_unit), NVS_SETTINGS_KEY_WIND_SPEED_UNIT)) goto commit_failed;
 
 		// Rain unit
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_RAIN_UNIT, _current_settings.precip_unit), NVS_SETTINGS_KEY_RAIN_UNIT)) goto commit_failed;
+		if(full_sync || _current_settings.precip_unit != prev.precip_unit)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_RAIN_UNIT, _current_settings.precip_unit), NVS_SETTINGS_KEY_RAIN_UNIT)) goto commit_failed;
 
 		// Pressure unit
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_PRESSURE_UNIT, _current_settings.pressure_unit), NVS_SETTINGS_KEY_PRESSURE_UNIT)) goto commit_failed;
+		if(full_sync || _current_settings.pressure_unit != prev.pressure_unit)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_PRESSURE_UNIT, _current_settings.pressure_unit), NVS_SETTINGS_KEY_PRESSURE_UNIT)) goto commit_failed;
 
 		// Idle backlight level
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_IDLE_BACKLIGHT_LEVEL, _current_settings.idle_backlight_level), NVS_SETTINGS_KEY_IDLE_BACKLIGHT_LEVEL)) goto commit_failed;
+		if(full_sync || _current_settings.idle_backlight_level != prev.idle_backlight_level)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_IDLE_BACKLIGHT_LEVEL, _current_settings.idle_backlight_level), NVS_SETTINGS_KEY_IDLE_BACKLIGHT_LEVEL)) goto commit_failed;
 
 		// Screen rotation
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_SCREEN_ROTATION, _current_settings.scr_rot), NVS_SETTINGS_KEY_SCREEN_ROTATION)) goto commit_failed;
+		if(full_sync || _current_settings.scr_rot != prev.scr_rot)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_SCREEN_ROTATION, _current_settings.scr_rot), NVS_SETTINGS_KEY_SCREEN_ROTATION)) goto commit_failed;
 
-        // Debug build MQTT broker
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_MQTT_BROKER, _current_settings.mqtt_broker_id), NVS_SETTINGS_KEY_MQTT_BROKER)) goto commit_failed;
+		// Debug build MQTT broker
+		if(full_sync || _current_settings.mqtt_broker_id != prev.mqtt_broker_id)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_MQTT_BROKER, _current_settings.mqtt_broker_id), NVS_SETTINGS_KEY_MQTT_BROKER)) goto commit_failed;
 
 		// MQTT Disabled
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MQTT_DISABLED, _current_settings.mqtt_disabled ? 1 : 0), NVS_SETTINGS_KEY_MQTT_DISABLED)) goto commit_failed;
+		if(full_sync || _current_settings.mqtt_disabled != prev.mqtt_disabled)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MQTT_DISABLED, _current_settings.mqtt_disabled ? 1 : 0), NVS_SETTINGS_KEY_MQTT_DISABLED)) goto commit_failed;
 
 		// Cloud Pairing Enabled
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_CLOUD_PAIRING_ENABLED, _current_settings.cloud_pairing_enabled ? 1 : 0), NVS_SETTINGS_KEY_CLOUD_PAIRING_ENABLED)) goto commit_failed;
+		if(full_sync || _current_settings.cloud_pairing_enabled != prev.cloud_pairing_enabled)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_CLOUD_PAIRING_ENABLED, _current_settings.cloud_pairing_enabled ? 1 : 0), NVS_SETTINGS_KEY_CLOUD_PAIRING_ENABLED)) goto commit_failed;
 
 		// Pairing mode
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_PAIR_MODE, (u8)_current_settings.pair_mode), NVS_SETTINGS_KEY_PAIR_MODE)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_PAIR_SOURCE, (u8)_current_settings.pair_source), NVS_SETTINGS_KEY_PAIR_SOURCE)) goto commit_failed;
+		if(full_sync || _current_settings.pair_mode != prev.pair_mode)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_PAIR_MODE, (u8)_current_settings.pair_mode), NVS_SETTINGS_KEY_PAIR_MODE)) goto commit_failed;
+		if(full_sync || _current_settings.pair_source != prev.pair_source)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_PAIR_SOURCE, (u8)_current_settings.pair_source), NVS_SETTINGS_KEY_PAIR_SOURCE)) goto commit_failed;
 
 		// Local pair cloud-sync pending flag
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_LOCAL_PAIR_SYNC_PENDING, _current_settings.local_pair_sync_pending ? 1 : 0), NVS_SETTINGS_KEY_LOCAL_PAIR_SYNC_PENDING)) goto commit_failed;
+		if(full_sync || _current_settings.local_pair_sync_pending != prev.local_pair_sync_pending)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_LOCAL_PAIR_SYNC_PENDING, _current_settings.local_pair_sync_pending ? 1 : 0), NVS_SETTINGS_KEY_LOCAL_PAIR_SYNC_PENDING)) goto commit_failed;
 		
 		// Debug mode enabled
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_DEBUG_VERBOSITY, (u32)_current_settings.debug_verbosity), NVS_SETTINGS_DEBUG_VERBOSITY)) goto commit_failed;
+		if(full_sync || _current_settings.debug_verbosity != prev.debug_verbosity)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_DEBUG_VERBOSITY, (u32)_current_settings.debug_verbosity), NVS_SETTINGS_DEBUG_VERBOSITY)) goto commit_failed;
 
-		// Last on screen tab
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_LAST_TAB, _current_settings.last_tab), NVS_SETTINGS_LAST_TAB)) goto commit_failed;
+		// Note: last_tab is retained in RTC_NOINIT_ATTR SRAM (_rtc_last_tab_cache) so LCD tab switches never wear NVS flash.
 
 		// Weather station ID
-		if(!persist(nvs_set_i64(nvs_handle, NVS_SETTINGS_WS_ID, _current_settings.ws_id), NVS_SETTINGS_WS_ID)) goto commit_failed;
+		if(full_sync || _current_settings.ws_id != prev.ws_id)
+			if(!persist(nvs_set_i64(nvs_handle, NVS_SETTINGS_WS_ID, _current_settings.ws_id), NVS_SETTINGS_WS_ID)) goto commit_failed;
 
 		// Weather station type
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_WS_TYPE, (u32)_current_settings.ws_type), NVS_SETTINGS_WS_TYPE)) goto commit_failed;
+		if(full_sync || _current_settings.ws_type != prev.ws_type)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_WS_TYPE, (u32)_current_settings.ws_type), NVS_SETTINGS_WS_TYPE)) goto commit_failed;
 
 		// Weather station public key
-		if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_WS_PUBKEY, _current_settings.ws_pubkey, sizeof(_current_settings.ws_pubkey)), NVS_SETTINGS_WS_PUBKEY)) goto commit_failed;
+		if(full_sync || memcmp(_current_settings.ws_pubkey, prev.ws_pubkey, sizeof(_current_settings.ws_pubkey)) != 0)
+			if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_WS_PUBKEY, _current_settings.ws_pubkey, sizeof(_current_settings.ws_pubkey)), NVS_SETTINGS_WS_PUBKEY)) goto commit_failed;
 
 		// Weather station serial number
-		if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_WS_SN, _current_settings.ws_sn, sizeof(_current_settings.ws_sn)), NVS_SETTINGS_WS_SN)) goto commit_failed;
+		if(full_sync || memcmp(_current_settings.ws_sn, prev.ws_sn, sizeof(_current_settings.ws_sn)) != 0)
+			if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_WS_SN, _current_settings.ws_sn, sizeof(_current_settings.ws_sn)), NVS_SETTINGS_WS_SN)) goto commit_failed;
 
 		// Cloud station attributes
-		if(!persist(nvs_set_i64(nvs_handle, NVS_SETTINGS_KEY_CLOUD_WS_ID, _current_settings.cloud_ws_id), NVS_SETTINGS_KEY_CLOUD_WS_ID)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_CLOUD_WS_VALID, _current_settings.cloud_ws_valid ? 1 : 0), NVS_SETTINGS_KEY_CLOUD_WS_VALID)) goto commit_failed;
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_CLOUD_WS_TYPE, (u32)_current_settings.cloud_ws_type), NVS_SETTINGS_KEY_CLOUD_WS_TYPE)) goto commit_failed;
-		if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_CLOUD_WS_SN, _current_settings.cloud_ws_sn, sizeof(_current_settings.cloud_ws_sn)), NVS_SETTINGS_KEY_CLOUD_WS_SN)) goto commit_failed;
-		if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_CLOUD_WS_PUBKEY, _current_settings.cloud_ws_pubkey, sizeof(_current_settings.cloud_ws_pubkey)), NVS_SETTINGS_KEY_CLOUD_WS_PUBKEY)) goto commit_failed;
+		if(full_sync || _current_settings.cloud_ws_id != prev.cloud_ws_id)
+			if(!persist(nvs_set_i64(nvs_handle, NVS_SETTINGS_KEY_CLOUD_WS_ID, _current_settings.cloud_ws_id), NVS_SETTINGS_KEY_CLOUD_WS_ID)) goto commit_failed;
+		if(full_sync || _current_settings.cloud_ws_valid != prev.cloud_ws_valid)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_CLOUD_WS_VALID, _current_settings.cloud_ws_valid ? 1 : 0), NVS_SETTINGS_KEY_CLOUD_WS_VALID)) goto commit_failed;
+		if(full_sync || _current_settings.cloud_ws_type != prev.cloud_ws_type)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_CLOUD_WS_TYPE, (u32)_current_settings.cloud_ws_type), NVS_SETTINGS_KEY_CLOUD_WS_TYPE)) goto commit_failed;
+		if(full_sync || memcmp(_current_settings.cloud_ws_sn, prev.cloud_ws_sn, sizeof(_current_settings.cloud_ws_sn)) != 0)
+			if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_CLOUD_WS_SN, _current_settings.cloud_ws_sn, sizeof(_current_settings.cloud_ws_sn)), NVS_SETTINGS_KEY_CLOUD_WS_SN)) goto commit_failed;
+		if(full_sync || memcmp(_current_settings.cloud_ws_pubkey, prev.cloud_ws_pubkey, sizeof(_current_settings.cloud_ws_pubkey)) != 0)
+			if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_CLOUD_WS_PUBKEY, _current_settings.cloud_ws_pubkey, sizeof(_current_settings.cloud_ws_pubkey)), NVS_SETTINGS_KEY_CLOUD_WS_PUBKEY)) goto commit_failed;
 
 		// Meshtastic Environmental Telemetry
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_ENV_EN, _current_settings.mesh_env_telemetry_enabled ? 1 : 0), NVS_SETTINGS_KEY_MESH_ENV_EN)) goto commit_failed;
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_MESH_ENV_INT, _current_settings.mesh_env_telemetry_interval_sec), NVS_SETTINGS_KEY_MESH_ENV_INT)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_ENV_HOP, _current_settings.mesh_env_telemetry_hop_limit), NVS_SETTINGS_KEY_MESH_ENV_HOP)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_TX_PWR_HIGH, _current_settings.mesh_tx_power_high ? 1 : 0), NVS_SETTINGS_KEY_MESH_TX_PWR_HIGH)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_PRESET, _current_settings.mesh_modem_preset), NVS_SETTINGS_KEY_MESH_PRESET)) goto commit_failed;
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_MESH_FREQ, _current_settings.mesh_freq_hz), NVS_SETTINGS_KEY_MESH_FREQ)) goto commit_failed;
-		if(!persist(nvs_set_u16(nvs_handle, NVS_SETTINGS_KEY_MESH_BW, _current_settings.mesh_bw_khz), NVS_SETTINGS_KEY_MESH_BW)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_SF, _current_settings.mesh_sf), NVS_SETTINGS_KEY_MESH_SF)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_CR, _current_settings.mesh_cr), NVS_SETTINGS_KEY_MESH_CR)) goto commit_failed;
-		if(!persist(nvs_set_i8(nvs_handle, NVS_SETTINGS_KEY_MESH_TX_PWR, _current_settings.mesh_tx_power_dbm), NVS_SETTINGS_KEY_MESH_TX_PWR)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_CUSTOM_NAME_EN, _current_settings.mesh_custom_name_enabled ? 1 : 0), NVS_SETTINGS_KEY_MESH_CUSTOM_NAME_EN)) goto commit_failed;
-		if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_MESH_CUSTOM_NAME, _current_settings.mesh_custom_name, sizeof(_current_settings.mesh_custom_name)), NVS_SETTINGS_KEY_MESH_CUSTOM_NAME)) goto commit_failed;
-		if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_MESH_CUSTOM_SHORT_NAME, _current_settings.mesh_custom_short_name, sizeof(_current_settings.mesh_custom_short_name)), NVS_SETTINGS_KEY_MESH_CUSTOM_SHORT_NAME)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_env_telemetry_enabled != prev.mesh_env_telemetry_enabled)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_ENV_EN, _current_settings.mesh_env_telemetry_enabled ? 1 : 0), NVS_SETTINGS_KEY_MESH_ENV_EN)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_env_telemetry_interval_sec != prev.mesh_env_telemetry_interval_sec)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_MESH_ENV_INT, _current_settings.mesh_env_telemetry_interval_sec), NVS_SETTINGS_KEY_MESH_ENV_INT)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_env_telemetry_hop_limit != prev.mesh_env_telemetry_hop_limit)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_ENV_HOP, _current_settings.mesh_env_telemetry_hop_limit), NVS_SETTINGS_KEY_MESH_ENV_HOP)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_tx_power_high != prev.mesh_tx_power_high)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_TX_PWR_HIGH, _current_settings.mesh_tx_power_high ? 1 : 0), NVS_SETTINGS_KEY_MESH_TX_PWR_HIGH)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_modem_preset != prev.mesh_modem_preset)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_PRESET, _current_settings.mesh_modem_preset), NVS_SETTINGS_KEY_MESH_PRESET)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_freq_hz != prev.mesh_freq_hz)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_MESH_FREQ, _current_settings.mesh_freq_hz), NVS_SETTINGS_KEY_MESH_FREQ)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_bw_khz != prev.mesh_bw_khz)
+			if(!persist(nvs_set_u16(nvs_handle, NVS_SETTINGS_KEY_MESH_BW, _current_settings.mesh_bw_khz), NVS_SETTINGS_KEY_MESH_BW)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_sf != prev.mesh_sf)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_SF, _current_settings.mesh_sf), NVS_SETTINGS_KEY_MESH_SF)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_cr != prev.mesh_cr)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_CR, _current_settings.mesh_cr), NVS_SETTINGS_KEY_MESH_CR)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_tx_power_dbm != prev.mesh_tx_power_dbm)
+			if(!persist(nvs_set_i8(nvs_handle, NVS_SETTINGS_KEY_MESH_TX_PWR, _current_settings.mesh_tx_power_dbm), NVS_SETTINGS_KEY_MESH_TX_PWR)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_custom_name_enabled != prev.mesh_custom_name_enabled)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_CUSTOM_NAME_EN, _current_settings.mesh_custom_name_enabled ? 1 : 0), NVS_SETTINGS_KEY_MESH_CUSTOM_NAME_EN)) goto commit_failed;
+		if(full_sync || memcmp(_current_settings.mesh_custom_name, prev.mesh_custom_name, sizeof(_current_settings.mesh_custom_name)) != 0)
+			if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_MESH_CUSTOM_NAME, _current_settings.mesh_custom_name, sizeof(_current_settings.mesh_custom_name)), NVS_SETTINGS_KEY_MESH_CUSTOM_NAME)) goto commit_failed;
+		if(full_sync || memcmp(_current_settings.mesh_custom_short_name, prev.mesh_custom_short_name, sizeof(_current_settings.mesh_custom_short_name)) != 0)
+			if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_MESH_CUSTOM_SHORT_NAME, _current_settings.mesh_custom_short_name, sizeof(_current_settings.mesh_custom_short_name)), NVS_SETTINGS_KEY_MESH_CUSTOM_SHORT_NAME)) goto commit_failed;
 
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_FWD_EN, _current_settings.mesh_multi_station_forwarding_enabled ? 1 : 0), NVS_SETTINGS_KEY_MESH_FWD_EN)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_EN, _current_settings.meshcore_gw_telemetry_enabled ? 1 : 0), NVS_SETTINGS_KEY_MESHCORE_GW_EN)) goto commit_failed;
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_INT, _current_settings.meshcore_gw_telemetry_interval_sec), NVS_SETTINGS_KEY_MESHCORE_GW_INT)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_PWR, _current_settings.meshcore_gw_tx_power_high ? 1 : 0), NVS_SETTINGS_KEY_MESHCORE_GW_PWR)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_PROF, _current_settings.meshcore_gw_profile_idx), NVS_SETTINGS_KEY_MESHCORE_GW_PROF)) goto commit_failed;
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_FREQ, _current_settings.meshcore_gw_freq_hz), NVS_SETTINGS_KEY_MESHCORE_GW_FREQ)) goto commit_failed;
-		if(!persist(nvs_set_u16(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_BW, _current_settings.meshcore_gw_bw_khz), NVS_SETTINGS_KEY_MESHCORE_GW_BW)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_SF, _current_settings.meshcore_gw_sf), NVS_SETTINGS_KEY_MESHCORE_GW_SF)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_CR, _current_settings.meshcore_gw_cr), NVS_SETTINGS_KEY_MESHCORE_GW_CR)) goto commit_failed;
-		if(!persist(nvs_set_i8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_TX_PWR, _current_settings.meshcore_gw_tx_power_dbm), NVS_SETTINGS_KEY_MESHCORE_GW_TX_PWR)) goto commit_failed;
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_GW_RADIO_MODE, (_current_settings.gateway_radio_mode == GatewayRadioMode::MESHCORE_GATEWAY) ? 1 : 0), NVS_SETTINGS_KEY_GW_RADIO_MODE)) goto commit_failed;
+		if(full_sync || _current_settings.mesh_multi_station_forwarding_enabled != prev.mesh_multi_station_forwarding_enabled)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESH_FWD_EN, _current_settings.mesh_multi_station_forwarding_enabled ? 1 : 0), NVS_SETTINGS_KEY_MESH_FWD_EN)) goto commit_failed;
+		if(full_sync || _current_settings.meshcore_gw_telemetry_enabled != prev.meshcore_gw_telemetry_enabled)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_EN, _current_settings.meshcore_gw_telemetry_enabled ? 1 : 0), NVS_SETTINGS_KEY_MESHCORE_GW_EN)) goto commit_failed;
+		if(full_sync || _current_settings.meshcore_gw_telemetry_interval_sec != prev.meshcore_gw_telemetry_interval_sec)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_INT, _current_settings.meshcore_gw_telemetry_interval_sec), NVS_SETTINGS_KEY_MESHCORE_GW_INT)) goto commit_failed;
+		if(full_sync || _current_settings.meshcore_gw_tx_power_high != prev.meshcore_gw_tx_power_high)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_PWR, _current_settings.meshcore_gw_tx_power_high ? 1 : 0), NVS_SETTINGS_KEY_MESHCORE_GW_PWR)) goto commit_failed;
+		if(full_sync || _current_settings.meshcore_gw_profile_idx != prev.meshcore_gw_profile_idx)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_PROF, _current_settings.meshcore_gw_profile_idx), NVS_SETTINGS_KEY_MESHCORE_GW_PROF)) goto commit_failed;
+		if(full_sync || _current_settings.meshcore_gw_freq_hz != prev.meshcore_gw_freq_hz)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_FREQ, _current_settings.meshcore_gw_freq_hz), NVS_SETTINGS_KEY_MESHCORE_GW_FREQ)) goto commit_failed;
+		if(full_sync || _current_settings.meshcore_gw_bw_khz != prev.meshcore_gw_bw_khz)
+			if(!persist(nvs_set_u16(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_BW, _current_settings.meshcore_gw_bw_khz), NVS_SETTINGS_KEY_MESHCORE_GW_BW)) goto commit_failed;
+		if(full_sync || _current_settings.meshcore_gw_sf != prev.meshcore_gw_sf)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_SF, _current_settings.meshcore_gw_sf), NVS_SETTINGS_KEY_MESHCORE_GW_SF)) goto commit_failed;
+		if(full_sync || _current_settings.meshcore_gw_cr != prev.meshcore_gw_cr)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_CR, _current_settings.meshcore_gw_cr), NVS_SETTINGS_KEY_MESHCORE_GW_CR)) goto commit_failed;
+		if(full_sync || _current_settings.meshcore_gw_tx_power_dbm != prev.meshcore_gw_tx_power_dbm)
+			if(!persist(nvs_set_i8(nvs_handle, NVS_SETTINGS_KEY_MESHCORE_GW_TX_PWR, _current_settings.meshcore_gw_tx_power_dbm), NVS_SETTINGS_KEY_MESHCORE_GW_TX_PWR)) goto commit_failed;
+		if(full_sync || _current_settings.gateway_radio_mode != prev.gateway_radio_mode)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_GW_RADIO_MODE, (_current_settings.gateway_radio_mode == GatewayRadioMode::MESHCORE_GATEWAY) ? 1 : 0), NVS_SETTINGS_KEY_GW_RADIO_MODE)) goto commit_failed;
 
 		// Adaptive Weather Publishing Policy
-		AdaptivePublish::WeatherPolicyWire policy_wire;
-		AdaptivePublish::encode_wire(_current_settings.weather_policy, &policy_wire);
-		if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_WX_POLICY, &policy_wire, sizeof(policy_wire)), NVS_SETTINGS_KEY_WX_POLICY)) goto commit_failed;
+		if(full_sync || memcmp(&_current_settings.weather_policy, &prev.weather_policy, sizeof(_current_settings.weather_policy)) != 0)
+		{
+			AdaptivePublish::WeatherPolicyWire policy_wire;
+			AdaptivePublish::encode_wire(_current_settings.weather_policy, &policy_wire);
+			if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_WX_POLICY, &policy_wire, sizeof(policy_wire)), NVS_SETTINGS_KEY_WX_POLICY)) goto commit_failed;
+		}
 
 		// Remote reboot ID
-		if(!persist(nvs_set_u64(nvs_handle, NVS_SETTINGS_KEY_REBOOT_ID, _current_settings.last_reboot_id), NVS_SETTINGS_KEY_REBOOT_ID)) goto commit_failed;
+		if(full_sync || _current_settings.last_reboot_id != prev.last_reboot_id)
+			if(!persist(nvs_set_u64(nvs_handle, NVS_SETTINGS_KEY_REBOOT_ID, _current_settings.last_reboot_id), NVS_SETTINGS_KEY_REBOOT_ID)) goto commit_failed;
 
 		// Remote scan ID
-		if(!persist(nvs_set_u64(nvs_handle, NVS_SETTINGS_KEY_SCAN_ID, _current_settings.last_scan_id), NVS_SETTINGS_KEY_SCAN_ID)) goto commit_failed;
+		if(full_sync || _current_settings.last_scan_id != prev.last_scan_id)
+			if(!persist(nvs_set_u64(nvs_handle, NVS_SETTINGS_KEY_SCAN_ID, _current_settings.last_scan_id), NVS_SETTINGS_KEY_SCAN_ID)) goto commit_failed;
 
 		// Station ownership verification
-		if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_OWNERSHIP_CONF, _current_settings.station_ownership_confirmed ? 1 : 0), NVS_SETTINGS_KEY_OWNERSHIP_CONF)) goto commit_failed;
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_OWNERSHIP_ID, _current_settings.station_ownership_id), NVS_SETTINGS_KEY_OWNERSHIP_ID)) goto commit_failed;
-		if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_OWNERSHIP_TS, _current_settings.station_ownership_timestamp), NVS_SETTINGS_KEY_OWNERSHIP_TS)) goto commit_failed;
+		if(full_sync || _current_settings.station_ownership_confirmed != prev.station_ownership_confirmed)
+			if(!persist(nvs_set_u8(nvs_handle, NVS_SETTINGS_KEY_OWNERSHIP_CONF, _current_settings.station_ownership_confirmed ? 1 : 0), NVS_SETTINGS_KEY_OWNERSHIP_CONF)) goto commit_failed;
+		if(full_sync || _current_settings.station_ownership_id != prev.station_ownership_id)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_OWNERSHIP_ID, _current_settings.station_ownership_id), NVS_SETTINGS_KEY_OWNERSHIP_ID)) goto commit_failed;
+		if(full_sync || _current_settings.station_ownership_timestamp != prev.station_ownership_timestamp)
+			if(!persist(nvs_set_u32(nvs_handle, NVS_SETTINGS_KEY_OWNERSHIP_TS, _current_settings.station_ownership_timestamp), NVS_SETTINGS_KEY_OWNERSHIP_TS)) goto commit_failed;
 
-		// Commit
-		esp_ret = nvs_commit(nvs_handle);
-		if(!persist(esp_ret, "commit")) goto commit_failed;
+		// Cloud-assigned device name
+		if((full_sync && _current_settings.dev_name[0] != '\0') ||
+		   memcmp(_current_settings.dev_name, prev.dev_name, sizeof(_current_settings.dev_name)) != 0)
+			if(!persist(nvs_set_blob(nvs_handle, NVS_SETTINGS_KEY_DEV_NAME, _current_settings.dev_name, sizeof(_current_settings.dev_name)), NVS_SETTINGS_KEY_DEV_NAME)) goto commit_failed;
+
+		// Commit only when at least one key changed
+		if(dirty_keys > 0)
+		{
+			esp_ret = nvs_commit(nvs_handle);
+			if(!persist(esp_ret, "commit")) goto commit_failed;
+		}
 
 		nvs_close(nvs_handle);
+
+		_nvs_synced_settings = _current_settings;
+		_nvs_synced_valid = true;
 
 		if(_changed_categories != 0)
 		{

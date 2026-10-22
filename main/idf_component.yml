@@ -1,6 +1,6 @@
 ## IDF Component Manager Manifest File
 dependencies:
   mdns: "~1.1.0"
-  espressif/mqtt: "^1.0.0"
+  espressif/mqtt: "~1.1.0"
   espressif/cjson: "^1.7.19"
-  joltwallet/littlefs: "^1.14.5"
+  joltwallet/littlefs: "~1.22.3"

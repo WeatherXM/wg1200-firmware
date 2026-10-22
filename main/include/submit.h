@@ -11,6 +11,8 @@ RetResult enable_autostart();
 RetResult disable_autostart();
 RetResult set_timer();
 void start(void *param);
+bool try_lock_ota();
+void unlock_ota();
 
 }
 

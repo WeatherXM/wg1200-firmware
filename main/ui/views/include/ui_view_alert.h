@@ -22,6 +22,7 @@ public:
 	View &icon(const void *src_icon);
 	View &title(const char *title);
 	View &msg(const char *msg);
+	View &action_btn(const char *label, void (*cb)(void));
 	View &show();
 	View &hide();
 	bool is_shown();
@@ -44,6 +45,8 @@ private:
 	UiTypes::LabelComponent _lbl_title;
 	UiTypes::LabelComponent _lbl_msg;
 	UiTypes::ButtonComponent _button_x;
+	UiTypes::ButtonComponent _button_action;
+	void (*_action_cb)(void) = nullptr;
 	lv_color_t _color;
 };
 

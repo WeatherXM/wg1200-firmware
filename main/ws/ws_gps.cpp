@@ -44,6 +44,37 @@ struct RtcGpsCache
 };
 
 static RTC_NOINIT_ATTR RtcGpsCache _rtc_gps_cache;
+static const uint32_t RTC_TZ_SEEDED_MAGIC = 0x47545A53U; // "GTZS"
+static RTC_NOINIT_ATTR uint32_t _rtc_tz_seeded_magic;
+
+static void maybe_seed_tz_from_gps(float lon)
+{
+	if(!isfinite(lon) || lon < -180.0f || lon > 180.0f)
+	{
+		return;
+	}
+
+	// Only auto-seed timezone from paired GPS once when tz_offset is still at
+	// its unconfigured default (0), so manual user timezone overrides (e.g. DST)
+	// and longitude jitter near 7.5 + 15*k degree boundaries never cause repeated NVS writes.
+	if(Settings::get_tz_offset() != 0 || _rtc_tz_seeded_magic == RTC_TZ_SEEDED_MAGIC)
+	{
+		_rtc_tz_seeded_magic = RTC_TZ_SEEDED_MAGIC;
+		return;
+	}
+
+	int auto_tz = (int)roundf(lon / 15.0f);
+	if(auto_tz < -12) auto_tz = -12;
+	if(auto_tz > 14) auto_tz = 14;
+
+	_rtc_tz_seeded_magic = RTC_TZ_SEEDED_MAGIC;
+	if(auto_tz != 0)
+	{
+		ESP_LOGI(TAG, "Seeding initial timezone offset from paired GPS location: UTC%+d (lon: %.4f)", auto_tz, lon);
+		Settings::set_tz_offset(auto_tz);
+		Settings::commit();
+	}
+}
 
 uint32_t rtc_cache_checksum(const RtcGpsCache *cache)
 {
@@ -150,19 +181,7 @@ void persist_gps_data(GpsData *gps_data)
 	_rtc_gps_cache.lon = lon;
 	_rtc_gps_cache.checksum = rtc_cache_checksum(&_rtc_gps_cache);
 
-	if(!isnan(lon) && lon >= -180.0f && lon <= 180.0f)
-	{
-		int auto_tz = (int)roundf(lon / 15.0f);
-		if(auto_tz < -12) auto_tz = -12;
-		if(auto_tz > 14) auto_tz = 14;
-
-		if(Settings::get_tz_offset() != auto_tz)
-		{
-			ESP_LOGI(TAG, "Updating timezone offset from GPS location: UTC%+d (lon: %.4f)", auto_tz, lon);
-			Settings::set_tz_offset(auto_tz);
-			Settings::commit();
-		}
-	}
+	maybe_seed_tz_from_gps(lon);
 }
 
 }
@@ -199,20 +218,7 @@ void init()
 	}
 	else
 	{
-		float lon = _rtc_gps_cache.lon;
-		if(!isnan(lon) && lon >= -180.0f && lon <= 180.0f)
-		{
-			int auto_tz = (int)roundf(lon / 15.0f);
-			if(auto_tz < -12) auto_tz = -12;
-			if(auto_tz > 14) auto_tz = 14;
-
-			if(Settings::get_tz_offset() != auto_tz)
-			{
-				ESP_LOGI(TAG, "Restored timezone offset from retained GPS location: UTC%+d (lon: %.4f)", auto_tz, lon);
-				Settings::set_tz_offset(auto_tz);
-				Settings::commit();
-			}
-		}
+		maybe_seed_tz_from_gps(_rtc_gps_cache.lon);
 	}
 }
 
@@ -265,7 +271,6 @@ void set_last_gps_data(GpsData *gps_data)
 {
 	_gps_ring_buff.lock();
 	memcpy(&_last_gps_pack, gps_data, sizeof(GpsData));
-	persist_gps_data(&_last_gps_pack);
 	_gps_ring_buff.unlock();
 }
 

@@ -4,6 +4,8 @@
 
 #include "esp_wifi.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "nvs_flash.h"
 #include "string.h"
 #include "wifi.h"
@@ -80,8 +82,17 @@ ip_addr_t _secondary_dns;
 /** Status changed timestamp */
 uint32_t _last_status_changed_ts = 0;
 
-/** DNS resolve task handle */
+/** Manager notification queue (prevents single-slot xTaskNotify drops) */
+static constexpr size_t MANAGER_QUEUE_LEN = 16;
+static QueueHandle_t _manager_queue = NULL;
+static StaticQueue_t _manager_queue_buff;
+static uint8_t _manager_queue_storage[MANAGER_QUEUE_LEN * sizeof(ManagerNotification)] = {};
+
+/** Persistent DNS resolve worker task (stack in PSRAM to avoid runtime internal DRAM exhaustion) */
+static constexpr uint32_t DNS_RESOLVE_TASK_STACK_SIZE = 4096;
 static TaskHandle_t _dns_resolve_task_handle = NULL;
+EXT_RAM_BSS_ATTR static StackType_t _dns_resolve_task_stack[DNS_RESOLVE_TASK_STACK_SIZE] = {};
+static StaticTask_t _dns_resolve_task_buff;
 
 /** current ssid */
 char _wifi_ssid[Utils::WIFI_SSID_STRING_SIZE] = "";
@@ -236,6 +247,25 @@ RetResult init()
 	auto evg = GlobalState::get_event_group();
 	xEventGroupSetBits(evg, GlobalState::EV_WIFI_DISCONNECTED_BIT);
 
+	// Create manager notification queue before starting manager task
+	_manager_queue = xQueueCreateStatic(MANAGER_QUEUE_LEN, sizeof(ManagerNotification),
+		_manager_queue_storage, &_manager_queue_buff);
+	if(_manager_queue == NULL)
+	{
+		ESP_LOGE(TAG, "Could not create WiFi manager queue.");
+		return RET_ERROR;
+	}
+
+	// Create persistent DNS worker task (stack in PSRAM)
+	_dns_resolve_task_handle = xTaskCreateStatic(dns_resolve_task, "dns_res_task",
+		sizeof(_dns_resolve_task_stack), NULL, WIFI_MANAGER_WXM_TASK_PRIORITY,
+		_dns_resolve_task_stack, &_dns_resolve_task_buff);
+	if(_dns_resolve_task_handle == NULL)
+	{
+		ESP_LOGE(TAG, "Could not create DNS resolve task.");
+		return RET_ERROR;
+	}
+
 	// Create manager task
 	_manager_task_handle = xTaskCreateStatic(manager_task, WIFI_MANAGER_WXM_TASK_NAME, sizeof(_manager_task_stack), NULL,
 		WIFI_MANAGER_WXM_TASK_PRIORITY, _manager_task_stack, &_manager_task_buff);
@@ -294,11 +324,18 @@ RetResult deinit()
 {
 	esp_netif_destroy(_netif);
 	esp_netif_deinit();
-	// Free task
+	// Free tasks and queue
 	if(_manager_task_handle != NULL)
 		vTaskDelete(_manager_task_handle);
-
 	_manager_task_handle = NULL;
+
+	if(_dns_resolve_task_handle != NULL)
+		vTaskDelete(_dns_resolve_task_handle);
+	_dns_resolve_task_handle = NULL;
+
+	if(_manager_queue != NULL)
+		vQueueDelete(_manager_queue);
+	_manager_queue = NULL;
 
 	// Free timers
 	if(_wifi_waiting_for_ip_timer)
@@ -618,13 +655,16 @@ RetResult dns_resolve_sync()
 }
 
 /*******************************************************************************
- * FreeRTOS task to resolve DNS asynchronously without blocking WiFi Manager task
+ * Persistent FreeRTOS worker task to resolve DNS asynchronously without
+ * blocking WiFi Manager task or allocating internal DRAM at runtime.
  ******************************************************************************/
 static void dns_resolve_task(void *pvParameters)
 {
-	dns_resolve_sync();
-	_dns_resolve_task_handle = NULL;
-	vTaskDelete(NULL);
+	while(1)
+	{
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+		dns_resolve_sync();
+	}
 }
 
 /*******************************************************************************
@@ -634,14 +674,12 @@ void dns_resolve_async()
 {
 	if (_dns_resolve_task_handle != NULL)
 	{
-		ESP_LOGI(TAG, "DNS resolution already in progress, skipping spawn.");
-		return;
+		xTaskNotifyGive(_dns_resolve_task_handle);
 	}
-	BaseType_t ret = xTaskCreate(dns_resolve_task, "dns_res_task", 4096, NULL, 5, &_dns_resolve_task_handle);
-	if (ret != pdPASS)
+	else
 	{
-		ESP_LOGE(TAG, "Failed to create DNS resolve task");
-		_dns_resolve_task_handle = NULL;
+		ESP_LOGW(TAG, "DNS worker task unavailable, falling back to sync resolution");
+		dns_resolve_sync();
 	}
 }
 
@@ -924,14 +962,14 @@ bool is_connected()
 ******************************************************************************/
 RetResult notify_manager_task(ManagerNotification notification)
 {
-	if(!_manager_task_handle)
+	if(!_manager_queue)
 	{
-		ESP_LOGE(TAG, "manager_task_handle is NULL");
+		ESP_LOGE(TAG, "manager_queue is NULL");
 		return RET_ERROR;
 	}
-	if(xTaskNotify(_manager_task_handle, (uint32_t) notification, eSetValueWithoutOverwrite) != pdTRUE)
+	if(xQueueSend(_manager_queue, &notification, 0) != pdTRUE)
 	{
-		ESP_LOGE(TAG, "Manager missed notification");
+		ESP_LOGE(TAG, "Manager notification queue full (dropped %d)", (int)notification);
 		return RET_INVALID_STATE;
 	}
 	return RET_OK;
@@ -1043,13 +1081,13 @@ RetResult print_disconnect_reason(uint16_t reason)
 void manager_task(void *data)
 {
 	ESP_LOGI(TAG, "Manager task started");
-	uint32_t manager_notification;
+	ManagerNotification manager_notification;
 	while(1)
 	{
-		BaseType_t ret = xTaskNotifyWait(ULONG_MAX, ULONG_MAX, &manager_notification, portMAX_DELAY);
+		BaseType_t ret = xQueueReceive(_manager_queue, &manager_notification, portMAX_DELAY);
 		if(ret == pdFALSE)
 		{
-			ESP_LOGI(TAG, "xTaskNotifyWait timed out");
+			ESP_LOGI(TAG, "xQueueReceive timed out");
 			continue;
 		}
 		//ESP_LOGI(TAG, "Manager task got notification");

@@ -128,23 +128,15 @@ void on_btn_restore_fw(lv_event_t *event)
 void set_boot_factory_partition()
 {
 	ESP_LOGW(TAG, "Restoring factory partition");
-	esp_partition_iterator_t iterator = esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
-	// esp_partition_iterator_t iterator = esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
-	if(!iterator)
+	const esp_partition_t *partition = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+	if(!partition)
 	{
 		ESP_LOGE(TAG, "Factory partition not found.");
 		return;
 	}
 
-	const esp_partition_t *partition = esp_partition_get(iterator);
-	if(!partition)
-	{
-		ESP_LOGE(TAG, "Could not get factory partition info.");
-		return;
-	}
-
 	esp_err_t esp_ret = esp_ota_set_boot_partition(partition);
-	if(esp_ret != RET_OK)
+	if(esp_ret != ESP_OK)
 	{
 		ESP_LOGE(TAG, "Could not set factory as boot partition: %d", esp_ret);
 		return;

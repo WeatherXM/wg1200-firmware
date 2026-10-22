@@ -613,6 +613,7 @@ const char NVS_SETTINGS_KEY_SCAN_ID[] = "scan_id";
 const char NVS_SETTINGS_KEY_OWNERSHIP_CONF[] = "ws_own_conf";
 const char NVS_SETTINGS_KEY_OWNERSHIP_ID[] = "ws_own_id";
 const char NVS_SETTINGS_KEY_OWNERSHIP_TS[] = "ws_own_ts";
+const char NVS_SETTINGS_KEY_DEV_NAME[] = "dev_name";
 
 //
 // Backlight settings
