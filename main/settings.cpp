@@ -1464,9 +1464,7 @@ namespace Settings
 		return profile_id_matches_sn(_current_settings.cloud_ws_id,
 								 _current_settings.cloud_ws_sn) &&
 			   profile_bytes_ready(_current_settings.cloud_ws_sn,
-							   sizeof(_current_settings.cloud_ws_sn)) &&
-			   profile_bytes_ready(_current_settings.cloud_ws_pubkey,
-							   sizeof(_current_settings.cloud_ws_pubkey));
+							   sizeof(_current_settings.cloud_ws_sn));
 	}
 
 	int64_t get_cloud_ws_id()
@@ -2425,6 +2423,20 @@ namespace Settings
 		memcpy(_current_settings.ws_pubkey, _current_settings.cloud_ws_pubkey, sizeof(_current_settings.ws_pubkey));
 		_current_settings.pair_source = PairSource::PAIR_SOURCE_LOCAL;
 		_current_settings.pair_mode = PairMode::PAIR_MODE_LOCAL;
+		_changed_categories |= (u32)Category::SYSTEM;
+		return commit();
+	}
+
+	RetResult clear_local_ws_profile()
+	{
+		_current_settings.ws_id = -1;
+		_current_settings.ws_type = WsType::WS_TYPE_1300;
+		memset(_current_settings.ws_sn, 0xFF, sizeof(_current_settings.ws_sn));
+		memset(_current_settings.ws_pubkey, 0xFF, sizeof(_current_settings.ws_pubkey));
+		if (_current_settings.cloud_ws_valid && _current_settings.cloud_ws_id >= 0) {
+			_current_settings.pair_source = PairSource::PAIR_SOURCE_CLOUD;
+			_current_settings.pair_mode = PairMode::PAIR_MODE_CLOUD;
+		}
 		_changed_categories |= (u32)Category::SYSTEM;
 		return commit();
 	}

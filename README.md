@@ -14,7 +14,7 @@ This repository contains the open source firmware supporting the **WeatherXM WG1
 
 ## Local Web Console & REST API (`http://<gateway-ip>/`)
 
-Every WG1200 gateway serves a built-in, gzip-compressed local web console (`v0.8.37`) over HTTP with mDNS discovery (`_weatherxm._tcp`), real-time weather charts, microSD history management, bidirectional LCD ↔ Web unit synchronization, Meshtastic / MeshCore mesh configuration, live LoRa packet inspection, and an interactive REST API & `/llms.txt` endpoint for Home Assistant and AI agents.
+Every WG1200 gateway serves a built-in, gzip-compressed local web console (`v0.8.39`) over HTTP with mDNS discovery (`_weatherxm._tcp`), real-time weather charts, microSD history management, bidirectional LCD ↔ Web unit synchronization, Meshtastic / MeshCore mesh configuration, live LoRa packet inspection, and an interactive REST API & `/llms.txt` endpoint for Home Assistant and AI agents.
 
 ### Interactive Slideshow
 

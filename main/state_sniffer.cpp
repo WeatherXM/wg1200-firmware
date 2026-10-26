@@ -118,6 +118,8 @@ void ui_update_task(void *data);
 void update_ws_content();
 void publish_ws_unpair();
 void set_ws_field_pack(WsFields::FieldPack* field_pack);
+static bool field_pack_has_weather(WsFields::FieldPack* pack);
+static bool try_hydrate_ws_pack_from_buffer(uint32_t target_station_id);
 
 /******************************************************************************
  * @brief Show/Hide alert pop-ups.
@@ -691,6 +693,11 @@ void event_handler(void *arg, esp_event_base_t base, int32_t id, void *event_dat
 			//Show station reception alert
 			alert_handler(&_view_alert_ws_low_reception, true);
 			_view_sniffer._view_statusbar.update_icon_status_ws(UiTypes::StatusIconComponent::StatusType::WARN);
+			if(!_ws_content_presentable && WsHandler::get_pair_state() == WsHandler::PairState::PAIRED &&
+			   try_hydrate_ws_pack_from_buffer(WsHandler::get_paired_id()))
+			{
+				update_ws_content();
+			}
 		}
 		else if(ws_status_event == GlobalEvents::WsStatusChangedEvent::ACTIVE_OK || ws_status_event == GlobalEvents::WsStatusChangedEvent::ACTIVE_BUSY)
 		{
@@ -699,6 +706,11 @@ void event_handler(void *arg, esp_event_base_t base, int32_t id, void *event_dat
 			//Hide station reception alert
 			alert_handler(&_view_alert_ws_low_reception, false);
 			_view_sniffer._view_statusbar.update_icon_status_ws(UiTypes::StatusIconComponent::StatusType::POS);
+			if(!_ws_content_presentable && WsHandler::get_pair_state() == WsHandler::PairState::PAIRED &&
+			   try_hydrate_ws_pack_from_buffer(WsHandler::get_paired_id()))
+			{
+				update_ws_content();
+			}
 		}		
 		UiCommon::unlock();		
 	}
@@ -732,6 +744,10 @@ void event_handler(void *arg, esp_event_base_t base, int32_t id, void *event_dat
 				else
 				{
 					_view_sniffer.set_ws_pair_info(true, ws_info->pair_data.id);
+				}
+				if(!_ws_content_presentable && try_hydrate_ws_pack_from_buffer(ws_info->pair_data.id))
+				{
+					update_ws_content();
 				}
 			}
 			else
@@ -1208,6 +1224,10 @@ void setup_ui()
 		.msg("Please wait...")
 		.show_every_s(0); // Show on demand
 
+	if(!_ws_content_presentable && WsHandler::get_pair_state() == WsHandler::PairState::PAIRED)
+	{
+		try_hydrate_ws_pack_from_buffer(WsHandler::get_paired_id());
+	}
 	update_ws_content();
 	UiCommon::unlock();
 	
@@ -1276,13 +1296,59 @@ void update_datetime_content()
 	UiCommon::unlock();
 }
 
+static bool field_pack_has_weather(WsFields::FieldPack* pack)
+{
+	if(pack == NULL || pack->field_count == 0)
+	{
+		return false;
+	}
+	float f_val = 0.0f;
+	uint16_t u16_val = 0;
+	uint8_t u8_val = 0;
+	return (WsFields::get_field_val_from_pack(pack, WsFields::FieldType::WEATHER_TEMP, NULL, &f_val) == WsCommon::RetRes::OK) ||
+	       (WsFields::get_field_val_from_pack(pack, WsFields::FieldType::WEATHER_HUM, NULL, &f_val) == WsCommon::RetRes::OK) ||
+	       (WsFields::get_field_val_from_pack(pack, WsFields::FieldType::WEATHER_WIND_SPEED, NULL, &f_val) == WsCommon::RetRes::OK) ||
+	       (WsFields::get_field_val_from_pack(pack, WsFields::FieldType::WEATHER_WIND_DIR, NULL, &u16_val) == WsCommon::RetRes::OK) ||
+	       (WsFields::get_field_val_from_pack(pack, WsFields::FieldType::WEATHER_SOLAR_RAD, NULL, &f_val) == WsCommon::RetRes::OK) ||
+	       (WsFields::get_field_val_from_pack(pack, WsFields::FieldType::WEATHER_UV_INDEX, NULL, &u8_val) == WsCommon::RetRes::OK) ||
+	       (WsFields::get_field_val_from_pack(pack, WsFields::FieldType::WEATHER_PRECIP_RATE, NULL, &f_val) == WsCommon::RetRes::OK) ||
+	       (WsFields::get_field_val_from_pack(pack, WsFields::FieldType::WEATHER_PRESSURE, NULL, &f_val) == WsCommon::RetRes::OK);
+}
+
+static bool try_hydrate_ws_pack_from_buffer(uint32_t target_station_id)
+{
+	auto raw_buf = WeatherLogger::get_raw_buffer();
+	for(auto it = raw_buf.rbegin(); it != raw_buf.rend(); ++it)
+	{
+		WsFields::FieldPack candidate = *it;
+		if(!field_pack_has_weather(&candidate))
+		{
+			continue;
+		}
+		if(target_station_id != 0)
+		{
+			uint32_t pack_id = 0;
+			if(WsFields::get_field_val_from_pack(&candidate, WsFields::FieldType::META_ID, NULL, &pack_id) == WsCommon::RetRes::OK &&
+			   pack_id != 0 && pack_id != target_station_id)
+			{
+				continue;
+			}
+		}
+		memcpy(&_last_valid_ws_pack, &candidate, sizeof(WsFields::FieldPack));
+		_ws_content_presentable = true;
+		_last_valid_ws_data_ticks_ts_sec = Utils::get_tick_sec();
+		return true;
+	}
+	return false;
+}
+
 /******************************************************************************
  * Set FO packet to draw on screen and redraw. Locks UI.
  * @param packet Ptr to packet to display. Will be copied.
  ******************************************************************************/
 void set_ws_field_pack(WsFields::FieldPack* field_pack)
 {
-	if(NULL != field_pack)
+	if(NULL != field_pack && field_pack_has_weather(field_pack))
 	{
 		memcpy(&_last_valid_ws_pack, field_pack, sizeof(WsFields::FieldPack));
 		_ws_content_presentable = true;
@@ -1297,9 +1363,17 @@ void set_ws_field_pack(WsFields::FieldPack* field_pack)
  ******************************************************************************/
 bool get_latest_weather_pack(WsFields::FieldPack* field_pack)
 {
-	if(!_ws_content_presentable || field_pack == NULL)
+	if(field_pack == NULL)
 	{
 		return false;
+	}
+	if(!_ws_content_presentable)
+	{
+		if(WsHandler::get_pair_state() != WsHandler::PairState::PAIRED ||
+		   !try_hydrate_ws_pack_from_buffer(WsHandler::get_paired_id()))
+		{
+			return false;
+		}
 	}
 	memcpy(field_pack, &_last_valid_ws_pack, sizeof(WsFields::FieldPack));
 	return true;

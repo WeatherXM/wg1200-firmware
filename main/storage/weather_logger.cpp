@@ -1234,6 +1234,13 @@ bool parse_history_csv_line(char *line, int8_t tz_hours, WeatherAggregate &out_a
     out_agg.wind_gust_max = parse_csv_float_token(cols[6]);
     out_agg.precip_avg = parse_csv_float_token(cols[7]);
     out_agg.precip_accum = parse_csv_float_token(cols[8]);
+    if (!std::isnan(out_agg.precip_avg) && (out_agg.precip_avg < 0.0f || out_agg.precip_avg > 300.0f)) {
+        if (!std::isnan(out_agg.precip_accum) && out_agg.precip_accum >= 0.0f && out_agg.precip_accum <= 25.0f) {
+            out_agg.precip_avg = out_agg.precip_accum * 12.0f;
+        } else {
+            out_agg.precip_avg = 0.0f;
+        }
+    }
     out_agg.pressure_avg = parse_csv_float_token(cols[9]);
     out_agg.solar_rad_avg = parse_csv_float_token(cols[10]);
     out_agg.timezone_offset_hours = tz_hours;
@@ -1760,7 +1767,9 @@ void push_raw(const WsFields::FieldPack *pack)
                 gust_max = std::max(gust_max, value); gust_count++; field_presence |= FIELD_PRESENT_WIND_GUST;
             }
             if (WsFields::get_field_val_from_pack(&raw, WsFields::FieldType::WEATHER_PRECIP_RATE, nullptr, &value) == WsCommon::RetRes::OK) {
-                precip_sum += value; precip_count++; field_presence |= FIELD_PRESENT_PRECIP_RATE;
+                if (std::isfinite(value) && value >= 0.0f && value <= 300.0f) {
+                    precip_sum += value; precip_count++; field_presence |= FIELD_PRESENT_PRECIP_RATE;
+                }
             }
 
             float cumulative_precip = 0.0f;

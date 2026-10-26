@@ -390,6 +390,7 @@ namespace Settings
 	RetResult set_station_ownership_confirmed(bool confirmed, uint32_t station_id = 0, uint32_t timestamp = 0);
 
 	RetResult copy_cloud_profile_to_local();
+	RetResult clear_local_ws_profile();
 
 	RetResult commit();
 	RetResult commit_blocking();

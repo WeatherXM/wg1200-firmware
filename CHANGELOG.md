@@ -2,6 +2,44 @@
 
 All notable changes to the WG1200 firmware to support D1, D2 and future screenless gateway (**WG1400**) running in conjunction with MeshCore KISS modem firmware.
 
+## [0.8.39] - 2026-10-26
+
+### Fixed & Improved — Pairing Persistence, Clear Local NVS, Ownership Status Consistency & Multi-Gateway Diagnostics
+- **Boot Mode Persistence & Protection Against Unwanted Fallback Overwrite (`ws_handler.cpp`, `settings.h`, `settings.cpp`, `web_server.cpp`):**
+  - Updated `WsHandler::init()` so when `PAIR_MODE_CLOUD` is saved in NVS and a valid Cloud station profile exists, the gateway boots directly into the Cloud profile (`PHASE_CLOUD_NVS`) instead of prioritizing a stale Local NVS profile first.
+  - Updated `process_fallback_state_machine()` in `ws_handler.cpp` so that when a valid Cloud or Local NVS profile exists, the gateway switches only between configured NVS profiles and stays locked to the user's station (`PHASE_MANUAL`) rather than advancing into blind `PHASE_WS1001_SCAN` / `PHASE_WS1300_SWEEP` desperation latch and overwriting Local NVS with a neighboring station.
+  - Added `Settings::clear_local_ws_profile()` and `POST /clear_local` (`post_clear_local_handler`) along with a **CLEAR LOCAL** button in the Web UI Station Pairing cards to wipe a stale Local NVS profile (`ws_id`, `ws_sn`, `ws_pubkey`) and automatically switch to the Cloud profile if present.
+- **Unified Dashboard & Settings Ownership / Operation Mode Status (`ws_handler.cpp`, `web_server.cpp`, `dashboard_html_gz.h`):**
+  - Cleared `WsHandler::g_manual_listen_slot = -1` upon pairing in `set_pair_state(PairState::PAIRED)` and auto-pairing in `packet_decoder()` so a diagnostic manual channel lock does not remain stuck after a station pairs.
+  - Fixed `get_status_handler()` (`operation_mode`) and `WsHandler::get_pairing_state_name()` (`pairing_state`) so a paired gateway in `PAIR_MODE_CLOUD` or `PAIR_MODE_LOCAL` always reports `"cloud"` / `"local"` (`"cloud_verified"` / `"local_override"`) instead of `"listen"` / `"standby_discovery"` if `g_manual_listen_slot` was set.
+  - Unified `isReceiveOnly` across the Dashboard and Settings tabs in `updateStats()` so `STATION LINK` and `STATION OWNERSHIP` (`CONFIRMED` / `VERIFYING` / `NOT CONFIRMED` / `UNVERIFIED` / `RECEIVE ONLY`) always match between tabs.
+- **Manual Channel Lock Banner, Discovered Station PK Badges & Downlink Collision Warning (`web_server.cpp`, `dashboard_html_gz.h`):**
+  - Added a prominent **Manual Channel Lock Active** banner in the Station Pairing section whenever `manual_slot >= 0`, explaining that auto-pairing and channel scanning are paused and providing a one-click **Return to Auto Channel** (`setChannel(-1)`) button.
+  - Added `PK ✓` / `No PK` badges on each WS1300 entry in the **Discovered Stations** RAM list and updated `pairToLocal()` confirmation prompts to indicate when a station's `BOOT` Public Key and Serial Number are already cached in RAM.
+  - Added a warning banner on the Active Station card and Dashboard Ownership card when `station_type === 1300`, `ownership_status === 'failed'`, and `has_pubkey === true` (valid Public Key present and telemetry verified, but signed GPS downlink ignored), alerting the user that either the station is paired to another gateway's serial or another nearby gateway is colliding during the 300 ms RX window.
+- **Precipitation Rate Cross-Station Jump Protection, Historical Outlier Repair & Wet Time Accuracy (`ws_data.cpp`, `weather_logger.cpp`, `web_server.cpp`, `dashboard_html_gz.h`):**
+  - Tracked `_precip_rate_station_id` and `_daily_precip_station_id` (`META_ID`) in `WsData::update_precip_rate_params()` so switching between stations automatically resets the precipitation rate state and re-anchors the daily rain baseline (preserving accumulated daily rainfall) instead of subtracting two different stations' lifetime cumulative counters.
+  - Added dry-period decay reset (`>= 3600s`), a 120s minimum initial rate window after boot/reset in `WsData::get_precip_rate()`, and physical bounds (`MAX_SINGLE_PACKET_PRECIP_DELTA_MM = 25.4 mm`, `MAX_VALID_PRECIP_RATE_MM_H = 300.0 mm/h`).
+  - Updated `WeatherLogger::parse_history_csv_line()`, `WeatherLogger::push_raw()`, and the `/history` & `/sd/view` chart renderers in `web_server.cpp` to sanitize unphysical historical rate spikes (`> 300 mm/h`) using `PrecipAccum_mm * 12` and to count 5-minute intervals toward `Wet Time` only when actual rain accumulated (`PrecipAccum_mm > 0`), ignoring the 60-minute `1/t` rate decay tail.
+
+## [0.8.38] - 2026-10-25
+
+### Fixed & Improved — Station Targeting, Ownership Verification, TFT Display & Web UI
+- **Cloud / Local Station Channel Resolution & Manual Target Mode (`ws_handler.cpp`, `web_server.cpp`, `submit.cpp`, `ws_1300.cpp`, `settings.cpp`):**
+  - Updated `apply_pair_mode()` in `ws_handler.cpp` and `handle_remote_settings()` in `submit.cpp` to resolve a target station's known serial, channel hint, and public key from `recent_stations` RAM cache and parse `ws_public_key` before evaluating `cloud_ws_profile_ready()`.
+  - Updated `Ws1300::packet_handler()` (`ws_1300.cpp`) to adopt the authentic 10-byte serial number and public key from a matching station's `BOOT` (`0x10`) or `ADV` (`0x11`) packet when the stored profile had a synthesized (`AA55AA55`) or blank (`0xFF`/`0x00`) serial.
+  - Added `PHASE_MANUAL` in `ws_handler.cpp` (`set_fallback_phase(AutoFallbackPhase::PHASE_MANUAL)`) so manually targeting a station via the Web UI holds the target indefinitely without triggering the boot fallback timer (`PHASE_LOCAL_NVS` -> `PHASE_CLOUD_NVS` -> `PHASE_WS1001_SCAN` / `PHASE_WS1300_SWEEP`).
+- **Automatic Ownership Verification & Station Reboot Guidance (`ws_handler.cpp`, `web_server.cpp`, `dashboard_html_gz.h`):**
+  - Automatically armed the GPS ownership challenge (`g_ownership_challenge_armed = true`) in `apply_pair_mode()` when targeting an unverified WS1300 station, and confirmed station ownership immediately upon receiving a valid `BOOT` (`0x10`) or `ADV` (`0x11`) packet from the paired station ID in addition to `GPS` (`0x12`) responses.
+  - Added clear status banners and step-by-step guidance in the Web UI (`web_server.cpp`, `dashboard_html_gz.h`) when a targeted station is awaiting ownership confirmation or missing credentials, instructing the user to hardware-reboot the outdoor station to emit a `BOOT`/`ADV` frame or use **REPAIR** for an authenticated remote reboot.
+- **TFT LCD Weather Display Hydration (`state_sniffer.cpp`):**
+  - Added `try_hydrate_ws_pack_from_buffer()` in `state_sniffer.cpp` so the local TFT screen immediately hydrates and displays live weather observations from `WsData` as soon as a station is paired and active, even before a new sensor cycle or ownership verification completes.
+- **Station Credential Indicators & LoRa Packet Log Filters (`web_server.cpp`, `mesh_frame.h`, `ws_handler.cpp`, `dashboard_html_gz.h`):**
+  - Extended `/status` with `local_has_pubkey`, `cloud_has_pubkey`, `local_sn_synthesized`, and `cloud_sn_synthesized` fields, and added visual credential indicators (`✔ Present`, `⚠ Missing (unverified)`, `Synthesized (CHx hint)`, `⚠ REPAIR NEEDED`) and human-readable fallback phase labels (`Waiting for Local Station`, `Waiting for Cloud Station`, `Manual Target (Locked)`, etc.) to the Web UI.
+  - Added `WS1001` and `WS1300` model filter buttons to the Web UI LoRa Packet Log panel, fixed `log_packet()` in `ws_handler.cpp` so sniffed frames record their station model (`WS1300`/`WS1001`) instead of `"FOREIGN"`, and tightened `MeshFrame::try_parse_meshtastic()` (`mesh_frame.h`) so random FSK/LoRa bytes with `portnum == 0` or `> 512` are not misclassified as Meshtastic frames.
+- **Web Console AI Prompt & `/llms.txt` Enrichment (`web_server.cpp`, `dashboard_html_gz.h`):**
+  - Fixed clipboard copy fallback for HTTP contexts in the Web Console AI / Home Assistant modal, generalized the AI prompt, and enriched `/llms.txt` documentation.
+
 ## [0.8.37] - 2026-10-22
 
 ### Highlights & Summary of New Features (v0.8.28 – v0.8.37)

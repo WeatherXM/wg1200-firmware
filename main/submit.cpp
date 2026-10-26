@@ -1551,6 +1551,23 @@ RetResult handle_remote_settings()
 		ESP_LOGW(TAG, "No %s key.", RS_KEY_WS_FREQ_NAME);
 	}
 
+	if(shared_attr.containsKey(RS_KEY_WS_PUBKEY))
+	{
+		const char* ws_pubkey_str = shared_attr[RS_KEY_WS_PUBKEY].is<const char*>()
+			? shared_attr[RS_KEY_WS_PUBKEY].as<const char*>() : nullptr;
+		uint8_t cloud_pubkey[WS_PUB_KEY_LEN] = {0};
+		if(ws_pubkey_str != nullptr &&
+		   Utils::hex_str_to_byte_array(ws_pubkey_str, cloud_pubkey,
+									   sizeof(cloud_pubkey)) == RetResult::RET_OK)
+		{
+			Settings::set_cloud_ws_pubkey(cloud_pubkey, sizeof(cloud_pubkey));
+		}
+		else
+		{
+			ESP_LOGE(TAG, "Failed to parse %s", RS_KEY_WS_PUBKEY);
+		}
+	}
+
 	// A WS1300 serial is ten bytes / twenty hexadecimal characters. Keep serial
 	// keys and numeric-ID aliases separate: treating an arbitrary serial as a
 	// decimal string used to turn "39FA23..." into decimal 39 (0x27).
@@ -1862,23 +1879,6 @@ RetResult handle_remote_settings()
 			SoftWatchdog::stop(&_swd_handle);
 			vTaskDelay(pdMS_TO_TICKS(500));
 			Utils::safe_restart(Utils::RestartReason::REMOTE_REBOOT);
-		}
-	}
-
-	if(shared_attr.containsKey(RS_KEY_WS_PUBKEY))
-	{
-		const char* ws_pubkey_str = shared_attr[RS_KEY_WS_PUBKEY].is<const char*>()
-			? shared_attr[RS_KEY_WS_PUBKEY].as<const char*>() : nullptr;
-		uint8_t cloud_pubkey[WS_PUB_KEY_LEN] = {0};
-		if(ws_pubkey_str != nullptr &&
-		   Utils::hex_str_to_byte_array(ws_pubkey_str, cloud_pubkey,
-									   sizeof(cloud_pubkey)) == RetResult::RET_OK)
-		{
-			Settings::set_cloud_ws_pubkey(cloud_pubkey, sizeof(cloud_pubkey));
-		}
-		else
-		{
-			ESP_LOGE(TAG, "Failed to parse %s", RS_KEY_WS_PUBKEY);
 		}
 	}
 

@@ -2362,6 +2362,16 @@ static const char g_dashboard_html[] = R"html(
                 border-color: rgba(23, 162, 184, 0.4);
                 color: #17a2b8;
             }
+            .filter-btn.active.filter-ws1001 {
+                background: rgba(56, 189, 248, 0.15);
+                border-color: rgba(56, 189, 248, 0.4);
+                color: #38bdf8;
+            }
+            .filter-btn.active.filter-ws1300 {
+                background: rgba(0, 210, 255, 0.15);
+                border-color: rgba(0, 210, 255, 0.4);
+                color: #00d2ff;
+            }
             .filter-btn.active.filter-meshtastic {
                 background: rgba(95, 213, 137, 0.15);
                 border-color: rgba(95, 213, 137, 0.4);
@@ -2548,6 +2558,8 @@ static const char g_dashboard_html[] = R"html(
                         <div class="packet-filter-bar">
                             <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600; margin-right: 0.2rem;">Filter:</span>
                             <button id="filter-wxm" class="filter-btn active filter-wxm" onclick="togglePacketFilter('weatherxm')"><span class="filter-dot"></span>WeatherXM P2P</button>
+                            <button id="filter-ws1001" class="filter-btn active filter-ws1001" onclick="togglePacketFilter('ws1001')"><span class="filter-dot"></span>WS1001</button>
+                            <button id="filter-ws1300" class="filter-btn active filter-ws1300" onclick="togglePacketFilter('ws1300')"><span class="filter-dot"></span>WS1300</button>
                             <button id="filter-meshtastic" class="filter-btn active filter-meshtastic" onclick="togglePacketFilter('meshtastic')"><span class="filter-dot"></span>Meshtastic</button>
                             <button id="filter-meshcore" class="filter-btn active filter-meshcore" onclick="togglePacketFilter('meshcore')"><span class="filter-dot"></span>MeshCore</button>
                             <button id="filter-other" class="filter-btn active filter-other" onclick="togglePacketFilter('other')"><span class="filter-dot"></span>Other</button>
@@ -2607,7 +2619,7 @@ static const char g_dashboard_html[] = R"html(
                             <span style="font-size: 0.8rem; color: #00f5a0; font-weight: 600;">LLM / Agent Standard</span>
                         </div>
                         <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1rem;">
-                            Token-efficient machine-readable reference adhering to the <code style="color: #00d2ff; font-family: monospace;">llms.txt</code> standard. Designed specifically for AI agents, LLMs, and local home automation. Includes full telemetry JSON schemas and ready-to-copy Home Assistant REST sensor YAML configuration.
+                            Token-efficient machine-readable reference adhering to the <code style="color: #00d2ff; font-family: monospace;">llms.txt</code> standard. Designed for AI coding agents, LLMs, custom scripts, and home automation. Includes complete JSON schemas for telemetry, history, RF diagnostics, mesh networking, SD logging, and control endpoints, plus Home Assistant configuration templates.
                         </p>
                         <div style="font-weight: 600; font-size: 0.8rem; color: var(--text-color); margin-bottom: 0.4rem;">Example Request:</div>
                         <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.3); border-radius: 8px; padding: 0.6rem 0.8rem; overflow-x: auto; margin-bottom: 0; gap: 1rem;">
@@ -3225,13 +3237,13 @@ static const char g_dashboard_html[] = R"html(
 
         <!-- AI & Home Assistant Integration Modal -->
         <div id="ai-prompt-modal" onclick="if(event.target === this) closeAiPromptModal();" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 10000; align-items: center; justify-content: center; padding: 1rem;">
-            <div style="background: #121727; border: 1px solid var(--card-border); border-radius: 16px; padding: 1.5rem; max-width: 580px; width: 100%; box-shadow: 0 15px 40px rgba(0,0,0,0.6); max-height: 90vh; overflow-y: auto;">
+            <div style="background: #121727; border: 1px solid var(--card-border); border-radius: 16px; padding: 1.5rem; max-width: 600px; width: 100%; box-shadow: 0 15px 40px rgba(0,0,0,0.6); max-height: 90vh; overflow-y: auto;">
                 <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--card-border); padding-bottom: 0.8rem; margin-bottom: 1rem;">
                     <div style="display: flex; align-items: center; gap: 0.6rem;">
                         <span style="font-size: 1.4rem;">🤖</span>
                         <div>
-                            <h3 style="font-size: 1rem; font-weight: 700; color: #fff; margin: 0;">AI & Home Assistant Setup</h3>
-                            <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0;">Works with ChatGPT, Claude Code, Antigravity, Codex & Home Assistant</p>
+                            <h3 style="font-size: 1rem; font-weight: 700; color: #fff; margin: 0;">AI Agent & Integration Setup</h3>
+                            <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0;">Works with any AI Agent (Claude Code, Antigravity, ChatGPT, Codex) & Home Assistant</p>
                         </div>
                     </div>
                     <button onclick="closeAiPromptModal()" style="background: transparent; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer; padding: 0.2rem 0.5rem; border-radius: 6px;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='var(--text-muted)'">✕</button>
@@ -3239,10 +3251,10 @@ static const char g_dashboard_html[] = R"html(
 
                 <div style="background: rgba(0, 245, 160, 0.05); border: 1px solid rgba(0, 245, 160, 0.25); border-radius: 12px; padding: 1rem; margin-bottom: 1rem;">
                     <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.75rem; line-height: 1.4;">
-                        Copy and paste this prompt into your AI agent (ChatGPT, Claude Code, Antigravity, Codex, or Home Assistant):
+                        Copy and paste this prompt into your AI agent to query live or historical weather data, diagnose RF & station health, configure the gateway, or generate integrations (scripts, dashboards, Home Assistant):
                     </p>
                     <div style="position: relative;">
-                        <pre id="ai-modal-prompt-text" style="background: rgba(0,0,0,0.5); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.75rem; font-size: 0.75rem; font-family: monospace; color: #00f5a0; white-space: pre-wrap; max-height: 180px; overflow-y: auto; margin: 0; line-height: 1.35;"></pre>
+                        <pre id="ai-modal-prompt-text" style="background: rgba(0,0,0,0.5); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.75rem; font-size: 0.75rem; font-family: monospace; color: #00f5a0; white-space: pre-wrap; max-height: 220px; overflow-y: auto; margin: 0; line-height: 1.35;"></pre>
                     </div>
                     <div style="display: flex; gap: 0.6rem; align-items: center; margin-top: 0.8rem;">
                         <button id="ai-modal-copy-btn" onclick="copyAiPrompt()" style="background: #00f5a0; color: #0b0f19; font-weight: 700; font-size: 0.78rem; padding: 0.45rem 1rem; border-radius: 8px; border: none; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 8px rgba(0,245,160,0.3); display: flex; align-items: center; gap: 0.4rem;">
@@ -3264,13 +3276,17 @@ static const char g_dashboard_html[] = R"html(
     <script>
         function openAiPromptModal() {
             const host = window.location.host || '192.168.1.100';
-            const prompt = `I have a WeatherXM weather gateway (WG1200) at http://${host}.
-Full API docs & schema: http://${host}/llms.txt
-Telemetry endpoint: GET http://${host}/status
+            const prompt = `I have a WeatherXM weather gateway (WG1200) on my local network at http://${host}.
+Full API reference & JSON schemas: http://${host}/llms.txt
 
-Please generate the Home Assistant configuration (configuration.yaml) using the REST integration:
-- Sensors under "weather": temp (°C), feels_like (°C), humidity (%), pressure (hPa), wind_speed (m/s), wind_gust (m/s), wind_dir_deg (0-359°), precip_rate (mm/h), uv (index), irradiance (W/m²).
-- Gateway fields: packet_reception (%), wifi_rssi (dBm).`;
+Key HTTP endpoints (no authentication required):
+- GET http://${host}/api/v1/info — gateway identity, Wi-Fi, paired station, RF region, and active units
+- GET http://${host}/api/v1/observations — latest real-time weather observation (add ?buffer=full for 15-min raw buffer)
+- GET http://${host}/api/v1/history — 24-hour historical series (5-min buckets)
+- GET http://${host}/status — complete gateway & RF link diagnostics, pairing state, and weather snapshot
+- GET http://${host}/packet_log — rolling LoRa RF packet log (RX/TX, RSSI/SNR, decoded fields)
+
+Please fetch and read http://${host}/llms.txt to learn all available telemetry, history, diagnostic, mesh (Meshtastic/MeshCore), SD card, and control endpoints, then help me query weather data, diagnose station/RF health, configure the gateway, or build an integration (e.g. scripts, dashboards, or Home Assistant).`;
 
             const promptEl = document.getElementById('ai-modal-prompt-text');
             if (promptEl) promptEl.textContent = prompt;
@@ -3287,21 +3303,65 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
         function copyAiPrompt() {
             const promptEl = document.getElementById('ai-modal-prompt-text');
             if (!promptEl) return;
-            navigator.clipboard.writeText(promptEl.textContent).then(() => {
+            const text = promptEl.textContent || '';
+
+            const showCopiedFeedback = () => {
                 const btnText = document.getElementById('ai-modal-copy-text');
                 const btn = document.getElementById('ai-modal-copy-btn');
                 if (btnText && btn) {
-                    const orig = btnText.textContent;
+                    if (!btn.dataset.origLabel) {
+                        btn.dataset.origLabel = btnText.textContent;
+                    }
                     btnText.textContent = '✓ Copied!';
                     btn.style.background = '#00d2ff';
-                    setTimeout(() => {
-                        btnText.textContent = orig;
+                    if (btn._copyTimer) clearTimeout(btn._copyTimer);
+                    btn._copyTimer = setTimeout(() => {
+                        btnText.textContent = btn.dataset.origLabel || 'Copy Prompt for AI';
                         btn.style.background = '#00f5a0';
                     }, 2500);
                 }
-            }).catch(() => {
-                alert('Copied to clipboard!');
-            });
+            };
+
+            const fallbackCopy = () => {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.setAttribute('readonly', '');
+                    ta.style.position = 'fixed';
+                    ta.style.top = '-9999px';
+                    ta.style.left = '-9999px';
+                    ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.focus();
+                    ta.select();
+                    ta.setSelectionRange(0, text.length);
+                    const ok = document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    if (ok) {
+                        showCopiedFeedback();
+                        return;
+                    }
+                } catch (e) {}
+
+                try {
+                    const range = document.createRange();
+                    range.selectNodeContents(promptEl);
+                    const sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                    if (document.execCommand('copy')) {
+                        sel.removeAllRanges();
+                        showCopiedFeedback();
+                        return;
+                    }
+                } catch (e) {}
+            };
+
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function' && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(showCopiedFeedback).catch(fallbackCopy);
+            } else {
+                fallbackCopy();
+            }
         }
 
         function testGet(path) {
@@ -3540,7 +3600,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         : (data.paired_id > 0 && data.paired_id !== 4294967295);
                     const isWs1300 = (data.station_type === 1300) || (isPaired && (data.active_source === 'cloud' ? data.cloud_ws_type === 1300 : data.local_ws_type === 1300));
                     const isWs1001 = (data.station_type === 1001) || (isPaired && !isWs1300);
-                    const isReceiveOnly = data.operation_mode === 'listen' || data.operation_mode === 'off';
+                    const isReceiveOnly = (data.pair_mode === 'off' || data.ownership_status === 'receive_only' || data.operation_mode === 'listen' || data.operation_mode === 'off');
                     const hasPairedWs1300 = isPaired && isWs1300 && !isReceiveOnly;
                     g_isWs1300 = isWs1300;
                     g_isD1Mode = isPaired && isWs1001;
@@ -3651,12 +3711,18 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                     g_pairProfiles.cloud = {
                         present: !!data.cloud_ws_valid,
                         ready: !!data.cloud_profile_ready,
-                        id: data.cloud_ws_id
+                        id: data.cloud_ws_id,
+                        type: data.cloud_ws_type || 1300,
+                        hasPk: !!data.cloud_has_pubkey,
+                        snSynth: !!data.cloud_sn_synthesized
                     };
                     g_pairProfiles.local = {
                         present: localProfilePresent,
                         ready: localProfileReady,
-                        id: data.local_ws_id
+                        id: data.local_ws_id,
+                        type: data.local_ws_type || 1300,
+                        hasPk: !!data.local_has_pubkey,
+                        snSynth: !!data.local_sn_synthesized
                     };
                     const badgeLive = document.getElementById('badge-live');
                     if (badgeLive) {
@@ -3742,7 +3808,10 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                             ownershipEl.style.color = '#ffca28';
                         } else if (data.ownership_status === 'failed') {
                             ownershipEl.textContent = 'NOT CONFIRMED';
-                            ownershipSubEl.textContent = 'No GPS response · Retry';
+                            const activePkKnown = (data.active_source === 'cloud') ? !!data.cloud_has_pubkey : !!data.local_has_pubkey;
+                            ownershipSubEl.textContent = (data.station_type === 1300 && activePkKnown)
+                                ? 'Downlink ignored (paired to another GW or RF collision) · Retry'
+                                : 'No GPS response · Retry';
                             ownershipEl.style.color = '#ff416c';
                         } else {
                             ownershipEl.textContent = 'UNVERIFIED';
@@ -3847,7 +3916,14 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                                     statusBadge = `<span style="font-size:0.68rem;font-weight:700;color:#bb86fc;background:rgba(187,134,252,0.15);padding:0.15rem 0.4rem;border-radius:4px;letter-spacing:0.5px;">DETECTED</span>`;
                                 }
 
-                                const pairLocalBtn = `<button onclick="pairToLocal(${id}, ${station.channel_slot}, ${station.type})" class="btn-sm-ctrl" style="color:#00e5ff;border-color:rgba(0,229,255,0.6);font-size:0.68rem;padding:0.25rem 0.55rem;font-weight:700;background:rgba(0,229,255,0.12);" title="Save this station to Local NVS and pair immediately">PAIR TO LOCAL</button>`;
+                                const hasPkRam = !!station.has_pubkey;
+                                const hasSnRam = !!station.has_sn;
+                                const pkBadge = (station.type === 1300)
+                                    ? (hasPkRam
+                                        ? `<span style="font-size:0.65rem;font-weight:700;color:#81c784;background:rgba(129,199,132,0.14);padding:0.1rem 0.35rem;border-radius:4px;" title="Station Public Key &amp; Serial Number already captured in RAM from a recent BOOT packet">PK ✓</span>`
+                                        : `<span style="font-size:0.65rem;font-weight:600;color:#ffb74d;background:rgba(255,183,77,0.12);padding:0.1rem 0.35rem;border-radius:4px;" title="Only weather packets seen so far; reboot station after targeting to capture Public Key">No PK</span>`)
+                                    : '';
+                                const pairLocalBtn = `<button onclick="pairToLocal(${id}, ${station.channel_slot}, ${station.type}, ${hasPkRam}, ${hasSnRam})" class="btn-sm-ctrl" style="color:#00e5ff;border-color:rgba(0,229,255,0.6);font-size:0.68rem;padding:0.25rem 0.55rem;font-weight:700;background:rgba(0,229,255,0.12);" title="Save this station (and any RAM-cached SN/PubKey) to Local NVS and target immediately">PAIR TO LOCAL</button>`;
                                 let action = '';
                                 if (isCurrentTarget) {
                                     action = `<div style="display:flex;gap:0.3rem;flex-wrap:wrap;justify-content:flex-end;align-items:center;">
@@ -3870,6 +3946,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                                         ${statusBadge}
                                         <span style="font-family:monospace;font-size:1.05rem;font-weight:700;color:#fff;letter-spacing:0.5px;">${idHex}</span>
                                         <span style="font-size:0.75rem;color:var(--text-muted);font-weight:600;">WS${station.type}</span>
+                                        ${pkBadge}
                                         <span style="font-size:0.72rem;color:var(--text-muted);">${channel} · RSSI ${station.rssi} dBm${snrStr} · ${station.age_sec}s ago${knownAs ? ` · ${knownAs}` : ''}</span>
                                     </div>
                                     <div>${action}</div>
@@ -4313,7 +4390,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                             uplinkBadge.style.color = '#4caf50';
                             uplinkBadge.style.border = '1px solid rgba(76, 175, 80, 0.2)';
                         } else if (data.uplink_enabled) {
-                            uplinkBadge.textContent = 'uplink waiting for verified target';
+                            uplinkBadge.textContent = 'uplink waiting for station data';
                             uplinkBadge.style.background = 'rgba(255, 183, 77, 0.1)';
                             uplinkBadge.style.color = '#ffb74d';
                             uplinkBadge.style.border = '1px solid rgba(255, 183, 77, 0.25)';
@@ -4371,7 +4448,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         const cloudId = fmtId(cloudPresent, data.cloud_ws_id);
                         const localId = fmtId(localPresent, data.local_ws_id);
                         const activeId = fmtId(isPaired, data.paired_id);
-                        const isReceiveOnly = (data.pair_mode === 'off' || data.operation_mode === 'receive_only');
+                        const isReceiveOnly = (data.pair_mode === 'off' || data.ownership_status === 'receive_only' || data.operation_mode === 'listen' || data.operation_mode === 'off');
                         const isCloudActive = data.active_source === 'cloud' && isPaired;
                         const isLocalActive = data.active_source === 'local' && isPaired;
 
@@ -4410,6 +4487,17 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                             return (lastByte % 8) + 1;
                         };
 
+                        const isSynthSn = (sn, synthFlag) => {
+                            if (synthFlag !== undefined) return !!synthFlag;
+                            if (!sn) return false;
+                            const s = String(sn).trim().toUpperCase();
+                            return s.length === 20 && s.slice(8, 16) === 'AA55AA55';
+                        };
+                        const cloudSnSynth = isSynthSn(data.cloud_ws_sn, data.cloud_sn_synthesized);
+                        const localSnSynth = isSynthSn(data.local_ws_sn, data.local_sn_synthesized);
+                        const cloudHasPk = !!data.cloud_has_pubkey;
+                        const localHasPk = !!data.local_has_pubkey;
+
                         const cloudSlot = data.cloud_ws_type === 1300 ? getWs1300SlotFromSn(data.cloud_ws_sn) : 0;
                         const cloudChanText = data.cloud_ws_type === 1300
                             ? (cloudSlot === 0 ? 'Base (868.0 MHz)' : `CH${cloudSlot - 1} (${(868.1 + (cloudSlot - 1) * 0.2).toFixed(1)} MHz)`)
@@ -4420,8 +4508,35 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                             ? (localSlot === 0 ? 'Base (868.0 MHz)' : `CH${localSlot - 1} (${(868.1 + (localSlot - 1) * 0.2).toFixed(1)} MHz)`)
                             : 'Base (868.0 MHz)';
 
+                        const fmtKnownSnHtml = (wsType, valid, sn, isSynth, slot) => {
+                            if (wsType === 1001) return `<span style="color:var(--text-muted);">N/A (WS1001)</span>`;
+                            if (!valid || isDummySn(sn)) return `<span style="color:#ffb74d; font-weight:600;">Missing</span>`;
+                            if (isSynth) return `<span style="color:#ffb74d; font-weight:600;" title="Synthesized channel-hint serial (${sn})">Synthesized (${slot > 0 ? 'CH' + (slot - 1) : 'Base'} hint)</span>`;
+                            return `<span style="font-family:monospace; color:#81c784;">${fmtSn(valid, sn)}</span>`;
+                        };
+                        const fmtKnownPkHtml = (wsType, hasPk) => {
+                            if (wsType === 1001) return `<span style="color:var(--text-muted);">N/A</span>`;
+                            return hasPk
+                                ? `<span style="color:#81c784; font-weight:600;">✔ Present</span>`
+                                : `<span style="color:#ffb74d; font-weight:600;" title="ECDSA signature check bypassed; telemetry still active. Run REPAIR to capture full credentials from BOOT.">⚠ Missing (unverified)</span>`;
+                        };
+
+                        const isManualLock = (data.manual_slot !== undefined && data.manual_slot >= 0);
+                        const manualChanDesc = isManualLock
+                            ? (data.manual_slot === 0 ? 'Base Frequency' : `WS1300 CH${data.manual_slot - 1}`)
+                            : '';
+                        const manualLockBannerHtml = isManualLock ? `
+                            <div style="margin-bottom:0.55rem; padding:0.45rem 0.75rem; border-radius:6px; background:rgba(0,210,255,0.1); border:1px solid rgba(0,210,255,0.4); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                                <div style="font-size:0.74rem; color:#80deea;">
+                                    🔒 <strong>Manual Channel Lock Active (${manualChanDesc}):</strong> Auto-pairing and background channel scanning are paused while locked to a manual channel.
+                                </div>
+                                <button onclick="setChannel(-1)" class="btn-sm-ctrl" style="color:#111; background:#00d2ff; border-color:#00d2ff; font-size:0.68rem; padding:0.2rem 0.55rem; font-weight:700;">
+                                    Return to Auto Channel
+                                </button>
+                            </div>` : '';
+
                         if (isPaired && !identitiesDiffer) {
-                            // OPTION A - MATCHED / NORMAL STATE: Single compact horizontal strip (~45px high)
+                            // OPTION A - MATCHED / NORMAL STATE
                             const activeModel = data.station_type ? `WS${data.station_type}` : (data.local_ws_type ? `WS${data.local_ws_type}` : (data.cloud_ws_type ? `WS${data.cloud_ws_type}` : ''));
                             const isSynced = (data.cloud_ws_match || (cloudReady && localReady));
                             const syncBadge = isSynced
@@ -4432,32 +4547,58 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
 
                             const targetSource = (data.active_source || 'local').toUpperCase();
                             const activeSlot = (data.station_type === 1300) ? (isCloudActive ? cloudSlot : localSlot) : 0;
+                            const activeChanText = isCloudActive ? cloudChanText : localChanText;
+                            const activeSn = isCloudActive ? data.cloud_ws_sn : data.local_ws_sn;
+                            const activeSnSynth = isCloudActive ? cloudSnSynth : localSnSynth;
+                            const activeHasPk = isCloudActive ? cloudHasPk : localHasPk;
                             const activeIdNum = (data.paired_id >>> 0) || (isCloudActive ? (data.cloud_ws_id >>> 0) : (data.local_ws_id >>> 0));
+                            const activeNeedsRepair = (data.station_type === 1300) && (!activeHasPk || activeSnSynth || isDummySn(activeSn) || data.ownership_status === 'failed');
+                            const activeNeedsBootHint = (data.station_type === 1300) && (activeNeedsRepair || data.ownership_status !== 'confirmed');
+                            const downlinkRejectedWarn = (data.station_type === 1300 && data.ownership_status === 'failed' && activeHasPk);
 
                             matchContainer.innerHTML = `
-                                <div style="padding:0.6rem 0.85rem; border:1px solid rgba(129,199,132,0.3); border-radius:8px; background:rgba(129,199,132,0.03); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.6rem; min-height:44px; box-sizing:border-box;">
-                                    <div style="display:flex; align-items:center; gap:0.65rem; flex-wrap:wrap;">
-                                        <span style="font-size:0.72rem; font-weight:700; color:#81c784; text-transform:uppercase; letter-spacing:0.5px;">Active Station</span>
-                                        <span style="font-family:monospace; font-size:1.05rem; font-weight:700; color:#fff; letter-spacing:0.5px;">${activeId}</span>
-                                        ${activeModel ? `<span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">${activeModel}</span>` : ''}
-                                        <span style="font-size:0.68rem; padding:0.15rem 0.45rem; border-radius:4px; background:rgba(255,255,255,0.07); color:var(--text-muted); font-weight:600;">TARGET: ${targetSource}</span>
-                                        ${syncBadge}
+                                ${manualLockBannerHtml}
+                                <div style="padding:0.6rem 0.85rem; border:1px solid ${activeNeedsRepair ? 'rgba(255,183,77,0.45)' : 'rgba(129,199,132,0.3)'}; border-radius:8px; background:rgba(129,199,132,0.03); display:flex; flex-direction:column; gap:0.45rem; min-height:44px; box-sizing:border-box;">
+                                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.6rem;">
+                                        <div style="display:flex; align-items:center; gap:0.65rem; flex-wrap:wrap;">
+                                            <span style="font-size:0.72rem; font-weight:700; color:#81c784; text-transform:uppercase; letter-spacing:0.5px;">Active Station</span>
+                                            <span style="font-family:monospace; font-size:1.05rem; font-weight:700; color:#fff; letter-spacing:0.5px;">${activeId}</span>
+                                            ${activeModel ? `<span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">${activeModel}</span>` : ''}
+                                            <span style="font-size:0.68rem; padding:0.15rem 0.45rem; border-radius:4px; background:rgba(255,255,255,0.07); color:var(--text-muted); font-weight:600;">TARGET: ${targetSource}</span>
+                                            ${syncBadge}
+                                            ${activeNeedsRepair ? `<span style="font-size:0.66rem; font-weight:700; padding:0.15rem 0.45rem; border-radius:4px; background:rgba(255,183,77,0.16); color:#ffb74d; border:1px solid rgba(255,183,77,0.4);" title="Station credentials incomplete (missing PubKey or full SN) or ownership unconfirmed. Reboot the station or click REPAIR to capture its BOOT packet.">⚠ REPAIR RECOMMENDED</span>` : ''}
+                                        </div>
+                                        <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
+                                            <button onclick="listenToRecent(${activeSlot}, ${activeIdNum})" class="btn-sm-ctrl" style="color:#00d2ff; border-color:rgba(0,210,255,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Listen / sniff on this station's channel">LISTEN</button>
+                                            ${data.station_type === 1300 ? `<button onclick="startTargetedRepair(${activeIdNum}, '${targetSource}', ${activeSlot})" class="btn-sm-ctrl" style="color:${activeNeedsRepair ? '#111' : '#ffb74d'}; background:${activeNeedsRepair ? '#ffb74d' : 'transparent'}; border-color:rgba(255,183,77,0.65); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Send authenticated reboot command to capture full SN + Public Key from BOOT">REPAIR</button>` : ''}
+                                            ${!isCloudActive && localPresent ? `<button onclick="clearLocalProfile()" class="btn-sm-ctrl" style="color:#ff8a80; border-color:rgba(255,82,82,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Delete saved Local NVS station profile">CLEAR LOCAL</button>` : ''}
+                                            ${!isScanningNow ? `
+                                            <span style="font-size:0.68rem; font-weight:700; color:${ownershipBadgeColor}; background:rgba(255,255,255,0.04); border:1px solid ${ownershipBadgeColor}55; padding:0.2rem 0.5rem; border-radius:4px;" title="Gateway decodes, displays, and uploads telemetry even when ownership is unverified">
+                                                OWNERSHIP ${ownershipBadgeText}
+                                            </span>
+                                            ${verifyBtn}` : ''}
+                                        </div>
                                     </div>
-                                    <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
-                                        <button onclick="listenToRecent(${activeSlot}, ${activeIdNum})" class="btn-sm-ctrl" style="color:#00d2ff; border-color:rgba(0,210,255,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Listen / sniff on this station's channel">LISTEN</button>
-                                        ${data.station_type === 1300 ? `<button onclick="startTargetedRepair(${activeIdNum}, '${targetSource}', ${activeSlot})" class="btn-sm-ctrl" style="color:#ffb74d; border-color:rgba(255,183,77,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Send authenticated reboot command">REPAIR</button>` : ''}
-                                        ${!isScanningNow ? `
-                                        <span style="font-size:0.68rem; font-weight:700; color:${ownershipBadgeColor}; background:rgba(255,255,255,0.04); border:1px solid ${ownershipBadgeColor}55; padding:0.2rem 0.5rem; border-radius:4px;">
-                                            OWNERSHIP ${ownershipBadgeText}
-                                        </span>
-                                        ${verifyBtn}` : ''}
+                                    <div style="font-size:0.7rem; color:var(--text-muted); display:flex; flex-wrap:wrap; gap:0.85rem; padding-top:0.25rem; border-top:1px solid rgba(255,255,255,0.06);">
+                                        <span>Channel: <strong style="color:#ddd;">${activeChanText}</strong></span>
+                                        <span>SN: ${fmtKnownSnHtml(data.station_type, true, activeSn, activeSnSynth, activeSlot)}</span>
+                                        <span>PubKey: ${fmtKnownPkHtml(data.station_type, activeHasPk)}</span>
                                     </div>
+                                    ${downlinkRejectedWarn ? `
+                                    <div style="font-size:0.7rem; color:#ff8a80; background:rgba(255,65,108,0.1); border:1px solid rgba(255,65,108,0.35); border-radius:5px; padding:0.35rem 0.6rem;">
+                                        ⚠ <strong>Station did not accept downlink challenge:</strong> Public Key is present (telemetry is verified and uploaded), but the station ignored our signed GPS request. Either <strong>the station is paired to a different gateway's serial</strong>, or <strong>another gateway in range is transmitting simultaneously</strong> and colliding during the 300 ms RX window.
+                                    </div>` : ''}
+                                    ${activeNeedsBootHint ? `
+                                    <div style="font-size:0.7rem; color:#ffcc80; background:rgba(255,183,77,0.07); border:1px solid rgba(255,183,77,0.22); border-radius:5px; padding:0.3rem 0.55rem;">
+                                        ℹ <strong>Locked to station (no timeout):</strong> To take ownership and capture full SN &amp; Public Key, <strong>reboot/reset the weather station</strong> (or click <strong>REPAIR</strong> if already paired to this gateway) so it transmits a <code>BOOT</code>/<code>ADV</code> packet.
+                                    </div>` : ''}
                                 </div>`;
                         } else if (cloudPresent || localPresent) {
                             // SHOW DETAILED CARDS: When profiles differ OR gateway is unpaired/scanning but profile(s) exist
                             let cardsHtml = '';
 
                             if (cloudPresent) {
+                                const cloudNeedsRepair = (data.cloud_ws_type === 1300) && (!cloudHasPk || cloudSnSynth || isDummySn(data.cloud_ws_sn));
                                 const cloudBadge = isCloudActive
                                     ? '<span style="background:rgba(129,199,132,0.2);color:#81c784;border:1px solid #81c784;padding:0.15rem 0.4rem;border-radius:4px;font-size:0.65rem;font-weight:700;">ACTIVE TARGET</span>'
                                     : '<span style="background:rgba(255,183,77,0.15);color:#ffb74d;border:1px solid #ffb74d;padding:0.15rem 0.4rem;border-radius:4px;font-size:0.65rem;font-weight:700;">SAVED IN CLOUD</span>';
@@ -4465,27 +4606,30 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                                 const cloudButtons = [];
                                 cloudButtons.push(`<button onclick="listenToRecent(${cloudSlot}, ${data.cloud_ws_id >>> 0})" class="btn-sm-ctrl" style="color:#00d2ff; border-color:rgba(0,210,255,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Listen / sniff on this station's channel">LISTEN</button>`);
                                 if (data.cloud_ws_type === 1300) {
-                                    cloudButtons.push(`<button onclick="startTargetedRepair(${data.cloud_ws_id >>> 0}, 'cloud', ${cloudSlot})" class="btn-sm-ctrl" style="color:#ffb74d; border-color:rgba(255,183,77,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Send authenticated reboot command">REPAIR</button>`);
+                                    cloudButtons.push(`<button onclick="startTargetedRepair(${data.cloud_ws_id >>> 0}, 'cloud', ${cloudSlot})" class="btn-sm-ctrl" style="color:${cloudNeedsRepair ? '#111' : '#ffb74d'}; background:${cloudNeedsRepair ? '#ffb74d' : 'transparent'}; border-color:rgba(255,183,77,0.65); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Send authenticated reboot command to capture full SN + Public Key from BOOT">REPAIR</button>`);
                                 }
                                 if (!isCloudActive) {
                                     cloudButtons.push(`<button onclick="switchActiveTarget('cloud')" class="btn-sm-ctrl" style="color:#81c784; border-color:rgba(129,199,132,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Switch radio target to this cloud profile">TARGET THIS</button>`);
                                 }
 
-                                const hideCloudSn = isDummySn(data.cloud_ws_sn);
                                 cardsHtml += `
                                     <div style="background:rgba(255,255,255,0.03); border:1px solid ${isCloudActive ? '#81c784' : 'var(--card-border)'}; border-radius:8px; padding:0.65rem 0.85rem; display:flex; flex-direction:column; justify-content:space-between; gap:0.4rem;">
                                         <div>
-                                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem;">
+                                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem; gap:0.4rem; flex-wrap:wrap;">
                                                 <span style="font-size:0.75rem; font-weight:700; color:#81c784; text-transform:uppercase;">Cloud Saved</span>
-                                                ${cloudBadge}
+                                                <div style="display:flex; gap:0.3rem; align-items:center;">
+                                                    ${cloudNeedsRepair ? '<span style="background:rgba(255,183,77,0.16);color:#ffb74d;border:1px solid rgba(255,183,77,0.4);padding:0.12rem 0.38rem;border-radius:4px;font-size:0.62rem;font-weight:700;" title="Missing PubKey or full SN; click REPAIR to capture BOOT credentials">⚠ REPAIR NEEDED</span>' : ''}
+                                                    ${cloudBadge}
+                                                </div>
                                             </div>
                                             <div style="display:flex; align-items:baseline; gap:0.5rem;">
                                                 <span style="font-family:monospace; font-size:1.15rem; font-weight:700; color:#fff;">${fmtId(cloudPresent, data.cloud_ws_id)}</span>
                                                 <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">${data.cloud_ws_type ? `WS${data.cloud_ws_type}` : 'WS1300'}</span>
                                             </div>
-                                            <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.25rem; display:flex; flex-wrap:wrap; gap:0.6rem;">
+                                            <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.25rem; display:flex; flex-wrap:wrap; gap:0.65rem;">
                                                 <span>Channel: <strong style="color:#ddd;">${cloudChanText}</strong></span>
-                                                ${hideCloudSn ? '' : `SN: <span style="font-family:monospace;">${fmtSn(cloudPresent, data.cloud_ws_sn)}</span>`}
+                                                <span>SN: ${fmtKnownSnHtml(data.cloud_ws_type, cloudPresent, data.cloud_ws_sn, cloudSnSynth, cloudSlot)}</span>
+                                                <span>PubKey: ${fmtKnownPkHtml(data.cloud_ws_type, cloudHasPk)}</span>
                                             </div>
                                         </div>
                                         <div style="display:flex; flex-wrap:wrap; gap:0.35rem; margin-top:0.5rem;">
@@ -4496,6 +4640,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
 
                             if (localPresent) {
                                 const isLocalActive = (data.active_source === 'local');
+                                const localNeedsRepair = (data.local_ws_type === 1300) && (!localHasPk || localSnSynth || isDummySn(data.local_ws_sn));
                                 const localBadge = isLocalActive
                                     ? '<span style="background:rgba(129,199,132,0.2);color:#81c784;border:1px solid #81c784;padding:0.15rem 0.4rem;border-radius:4px;font-size:0.65rem;font-weight:700;">ACTIVE TARGET</span>'
                                     : '<span style="background:rgba(0,210,255,0.15);color:#00d2ff;border:1px solid #00d2ff;padding:0.15rem 0.4rem;border-radius:4px;font-size:0.65rem;font-weight:700;">SAVED IN LOCAL</span>';
@@ -4503,27 +4648,31 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                                 const localButtons = [];
                                 localButtons.push(`<button onclick="listenToRecent(${localSlot}, ${data.local_ws_id >>> 0})" class="btn-sm-ctrl" style="color:#00d2ff; border-color:rgba(0,210,255,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Listen / sniff on this station's channel">LISTEN</button>`);
                                 if (data.local_ws_type === 1300) {
-                                    localButtons.push(`<button onclick="startTargetedRepair(${data.local_ws_id >>> 0}, 'local', ${localSlot})" class="btn-sm-ctrl" style="color:#ffb74d; border-color:rgba(255,183,77,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Send authenticated reboot command">REPAIR</button>`);
+                                    localButtons.push(`<button onclick="startTargetedRepair(${data.local_ws_id >>> 0}, 'local', ${localSlot})" class="btn-sm-ctrl" style="color:${localNeedsRepair ? '#111' : '#ffb74d'}; background:${localNeedsRepair ? '#ffb74d' : 'transparent'}; border-color:rgba(255,183,77,0.65); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Send authenticated reboot command to capture full SN + Public Key from BOOT">REPAIR</button>`);
                                 }
                                 if (!isLocalActive) {
                                     localButtons.push(`<button onclick="switchActiveTarget('local')" class="btn-sm-ctrl" style="color:#81c784; border-color:rgba(129,199,132,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Switch radio target to this local profile">TARGET THIS</button>`);
                                 }
+                                localButtons.push(`<button onclick="clearLocalProfile()" class="btn-sm-ctrl" style="color:#ff8a80; border-color:rgba(255,82,82,0.45); font-size:0.68rem; padding:0.2rem 0.5rem; font-weight:700;" title="Delete saved Local NVS station profile">CLEAR LOCAL</button>`);
 
-                                const hideLocalSn = isDummySn(data.local_ws_sn);
                                 cardsHtml += `
                                     <div style="background:rgba(255,255,255,0.03); border:1px solid ${isLocalActive ? '#81c784' : 'var(--card-border)'}; border-radius:8px; padding:0.65rem 0.85rem; display:flex; flex-direction:column; justify-content:space-between; gap:0.4rem;">
                                         <div>
-                                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem;">
+                                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem; gap:0.4rem; flex-wrap:wrap;">
                                                 <span style="font-size:0.75rem; font-weight:700; color:#00d2ff; text-transform:uppercase;">Local Saved</span>
-                                                ${localBadge}
+                                                <div style="display:flex; gap:0.3rem; align-items:center;">
+                                                    ${localNeedsRepair ? '<span style="background:rgba(255,183,77,0.16);color:#ffb74d;border:1px solid rgba(255,183,77,0.4);padding:0.12rem 0.38rem;border-radius:4px;font-size:0.62rem;font-weight:700;" title="Missing PubKey or full SN; click REPAIR to capture BOOT credentials">⚠ REPAIR NEEDED</span>' : ''}
+                                                    ${localBadge}
+                                                </div>
                                             </div>
                                             <div style="display:flex; align-items:baseline; gap:0.5rem;">
                                                 <span style="font-family:monospace; font-size:1.15rem; font-weight:700; color:#fff;">${fmtId(localPresent, data.local_ws_id)}</span>
                                                 <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">${data.local_ws_type ? `WS${data.local_ws_type}` : 'WS1300'}</span>
                                             </div>
-                                            <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.25rem; display:flex; flex-wrap:wrap; gap:0.6rem;">
+                                            <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.25rem; display:flex; flex-wrap:wrap; gap:0.65rem;">
                                                 <span>Channel: <strong style="color:#ddd;">${localChanText}</strong></span>
-                                                ${hideLocalSn ? '' : `SN: <span style="font-family:monospace;">${fmtSn(localPresent, data.local_ws_sn)}</span>`}
+                                                <span>SN: ${fmtKnownSnHtml(data.local_ws_type, localPresent, data.local_ws_sn, localSnSynth, localSlot)}</span>
+                                                <span>PubKey: ${fmtKnownPkHtml(data.local_ws_type, localHasPk)}</span>
                                             </div>
                                         </div>
                                         <div style="display:flex; flex-wrap:wrap; gap:0.35rem; margin-top:0.5rem;">
@@ -4534,12 +4683,23 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
 
                             let bottomBannerHtml = '';
                             if (!isScanningNow) {
+                                const activeIsWs1300 = (data.station_type === 1300);
+                                const activeHasPkCard = isCloudActive ? cloudHasPk : localHasPk;
+                                const downlinkRejectedCard = isPaired && activeIsWs1300 && data.ownership_status === 'failed' && activeHasPkCard;
+                                const activeCardNeedsBoot = isPaired && activeIsWs1300 && (
+                                    data.ownership_status !== 'confirmed' ||
+                                    (isCloudActive && (!cloudHasPk || cloudSnSynth || isDummySn(data.cloud_ws_sn))) ||
+                                    (!isCloudActive && (!localHasPk || localSnSynth || isDummySn(data.local_ws_sn)))
+                                );
+                                const bootInstruction = activeCardNeedsBoot
+                                    ? ` To take ownership and capture full SN &amp; Public Key, <strong>reboot/reset the station</strong> (or click <strong>REPAIR</strong>) so it sends a <code>BOOT</code>/<code>ADV</code> packet.`
+                                    : '';
                                 const footerBanner = !isPaired
                                     ? `<div style="font-size:0.74rem; color:#ffcc80;">
-                                           ℹ Gateway is currently unpaired. Click an action above to pair or listen to your station, or use the controls below.
+                                           ℹ Gateway is currently unpaired. Click <strong>TARGET THIS</strong> above to lock onto a saved station (without timeout), or use the controls below.
                                        </div>`
                                     : `<div style="font-size:0.74rem; color:#ffcc80;">
-                                           ⚠ Saved stations differ. Radio targeting <strong>${(data.active_source || 'target').toUpperCase()} (${activeId})</strong>. Select an action above to switch or repair.
+                                           ℹ Radio locked to <strong>${(data.active_source || 'target').toUpperCase()} (${activeId})</strong> (no timeout).${bootInstruction}
                                        </div>`;
 
                                 const ownershipSection = isPaired ? `
@@ -4551,6 +4711,10 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                                     </div>` : '';
 
                                 bottomBannerHtml = `
+                                    ${downlinkRejectedCard ? `
+                                    <div style="margin-top:0.5rem; font-size:0.7rem; color:#ff8a80; background:rgba(255,65,108,0.1); border:1px solid rgba(255,65,108,0.35); border-radius:6px; padding:0.4rem 0.7rem;">
+                                        ⚠ <strong>Station did not accept downlink challenge:</strong> Public Key is present (telemetry is verified and uploaded), but the station ignored our signed GPS request. Either <strong>the station is paired to a different gateway's serial</strong>, or <strong>another gateway in range is transmitting simultaneously</strong> and colliding during the 300 ms RX window.
+                                    </div>` : ''}
                                     <div style="margin-top:0.5rem; padding:0.45rem 0.75rem; border-radius:6px; background:rgba(255,183,77,0.07); border:1px solid rgba(255,183,77,0.25); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
                                         ${footerBanner}
                                         ${ownershipSection}
@@ -4558,6 +4722,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                             }
 
                             matchContainer.innerHTML = `
+                                ${manualLockBannerHtml}
                                 <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:0.6rem;">
                                     ${cardsHtml}
                                 </div>
@@ -4565,6 +4730,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         } else {
                             // Completely unpaired with NO saved cloud or local profile
                             matchContainer.innerHTML = `
+                                ${manualLockBannerHtml}
                                 <div style="padding:0.6rem 0.85rem; border:1px solid var(--card-border); border-radius:8px; background:rgba(255,255,255,0.02); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
                                     <div style="font-size:0.75rem; color:var(--text-muted);">
                                         <strong style="color:#ffb74d;">No station paired.</strong> Select <strong>SCAN</strong> below to detect nearby weather stations, or assign via WeatherXM Cloud.
@@ -4885,11 +5051,16 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
             return '0x' + (id >>> 0).toString(16).toUpperCase().padStart(8, '0');
         }
 
-        async function pairToLocal(id, slot, type) {
+        async function pairToLocal(id, slot, type, hasPk = false, hasSn = false) {
             const idHex = stationHex(id);
             const targetSlot = (type === 1001) ? 0 : slot;
             const channel = (targetSlot === 0) ? 'base' : `CH${targetSlot - 1}`;
-            if (!confirm(`Save station ${idHex} (WS${type}) on ${channel} to Local NVS and pair immediately?\n\nThis will configure Local NVS and switch the gateway to LOCAL pairing mode immediately.`)) {
+            const rebootNote = (type === 1300)
+                ? (hasPk && hasSn
+                    ? `\n\n✔ Full Serial Number & Public Key are already cached in RAM from a recent BOOT packet and will be saved directly to Local NVS.`
+                    : `\n\nNote: Only weather broadcasts have been seen so far (no Public Key in RAM). After targeting, reboot/reset the weather station so it transmits a BOOT/ADV packet.`)
+                : '';
+            if (!confirm(`Save station ${idHex} (WS${type}) on ${channel} to Local NVS and target it immediately?\n\nThe gateway will stay locked to this station (no auto-fallback timeout).${rebootNote}`)) {
                 return;
             }
             try {
@@ -4898,6 +5069,23 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                 updateStats();
             } catch (err) {
                 alert(`Could not pair to local NVS: ${err.message || err}`);
+            }
+        }
+
+        async function clearLocalProfile(localId, hasCloudFallback) {
+            const idHex = stationHex(localId);
+            const fallbackNote = hasCloudFallback
+                ? 'The gateway will automatically switch to your saved Cloud station profile.'
+                : 'No Cloud station profile is saved, so the gateway will become unpaired.';
+            if (!confirm(`Clear saved Local NVS station ${idHex}?\n\n${fallbackNote}`)) {
+                return;
+            }
+            try {
+                const resp = await fetch('/clear_local', { method: 'POST' });
+                if (!resp.ok) throw new Error(await resp.text());
+                updateStats();
+            } catch (err) {
+                alert(`Could not clear Local NVS profile: ${err.message || err}`);
             }
         }
 
@@ -4996,6 +5184,10 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
             }
         }
 
+        function switchActiveTarget(state) {
+            return setPairState(state);
+        }
+
         async function setPairState(state) {
             g_isUiLocked = true;
 
@@ -5019,14 +5211,18 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                         ? '0x' + (profile.id >>> 0).toString(16).toUpperCase().padStart(8, '0')
                         : 'no station ID';
                     const readinessText = profile.ready
-                        ? `The radio will target ${idText}.`
+                        ? `The radio will stay locked to ${idText} (no timeout).`
                         : `That profile is incomplete (${idText}); the radio cannot target it yet and may keep a saved fallback active.`;
-                    const ownershipWarning = state === 'cloud'
-                        ? ' Do not activate it while that WS1300 is served by another gateway: competing radio responses can collide.'
-                        : '';
+                    const isWs1300 = (profile.type || 1300) === 1300;
+                    const needsBoot = profile.ready && isWs1300 && (!profile.hasPk || profile.snSynth);
+                    const rebootHint = needsBoot
+                        ? `\n\nTo take ownership of ${idText} and capture its full Serial Number & Public Key, reboot/reset the weather station (or click REPAIR if already owned) so it transmits a BOOT/ADV packet.`
+                        : (profile.ready && isWs1300
+                            ? `\n\nIf this station was previously paired to another gateway, reboot/reset the weather station so it transmits a BOOT/ADV packet and pairs with this gateway.`
+                            : '');
                     const proceed = confirm(
                         `Switch to ${state.toUpperCase()}? ${readinessText} ` +
-                        `The other profile will remain saved.${ownershipWarning}`
+                        `The other profile will remain saved.${rebootHint}`
                     );
                     if (!proceed) return;
                 }
@@ -5210,38 +5406,55 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
 
         let packetFilters = {
             weatherxm: true,
+            ws1001: true,
+            ws1300: true,
             meshtastic: true,
             meshcore: true,
             other: true
         };
 
+        function syncPacketFilterButtons() {
+            const map = {
+                weatherxm: 'filter-wxm',
+                ws1001: 'filter-ws1001',
+                ws1300: 'filter-ws1300',
+                meshtastic: 'filter-meshtastic',
+                meshcore: 'filter-meshcore',
+                other: 'filter-other'
+            };
+            for (const [key, btnId] of Object.entries(map)) {
+                const btn = document.getElementById(btnId);
+                if (btn) {
+                    btn.classList.toggle('active', !!packetFilters[key]);
+                }
+            }
+        }
+
         function togglePacketFilter(cat) {
             if (packetFilters[cat] !== undefined) {
                 packetFilters[cat] = !packetFilters[cat];
-                const btnId = 'filter-' + (cat === 'weatherxm' ? 'wxm' : cat);
-                const btn = document.getElementById(btnId);
-                if (btn) {
-                    if (packetFilters[cat]) {
-                        btn.classList.add('active');
-                    } else {
-                        btn.classList.remove('active');
-                    }
+                if (cat === 'weatherxm') {
+                    packetFilters.ws1001 = packetFilters.weatherxm;
+                    packetFilters.ws1300 = packetFilters.weatherxm;
+                } else if (cat === 'ws1001' || cat === 'ws1300') {
+                    packetFilters.weatherxm = !!(packetFilters.ws1001 || packetFilters.ws1300);
                 }
+                syncPacketFilterButtons();
                 updatePackets();
             }
         }
 
         function getPacketCategory(pkt) {
-            if (pkt.category === 'weatherxm' || pkt.category === 'meshtastic' || pkt.category === 'meshcore' || pkt.category === 'other') {
-                return pkt.category;
-            }
             const t = (pkt.packet_type || '').toLowerCase();
             const st = (pkt.station_type || '').toLowerCase();
-            if (t.includes('meshcore') || st.includes('meshcore')) {
+            if (pkt.category === 'meshcore' || t.includes('meshcore') || st.includes('meshcore')) {
                 return 'meshcore';
             }
-            if (t.includes('mesh') || st.includes('meshtastic')) {
+            if (pkt.category === 'meshtastic' || t.includes('mesh') || st.includes('meshtastic')) {
                 return 'meshtastic';
+            }
+            if (pkt.category === 'weatherxm' || pkt.category === 'other') {
+                return pkt.category;
             }
             if (st.includes('ws1') || st.includes('ws2') || st.includes('weatherxm') || t.includes('sensors') || t.includes('boot') || t.includes('adv') || t.includes('gnss')) {
                 return 'weatherxm';
@@ -5262,6 +5475,12 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
 
                     const filteredData = data.filter(pkt => {
                         const cat = getPacketCategory(pkt);
+                        if (cat === 'weatherxm') {
+                            const st = (pkt.station_type || '').toUpperCase();
+                            if (st.includes('1001')) return !!packetFilters.ws1001;
+                            if (st.includes('1300')) return !!packetFilters.ws1300;
+                            return !!packetFilters.weatherxm;
+                        }
                         return !!packetFilters[cat];
                     });
 
@@ -7841,6 +8060,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
             const feelsLikeArrC = [];
             const dewPointArrC = [];
             const historyPrecipCmlMm = [];
+            const sanitizedPrecipRateMm = [];
             let runningCmlMm = 0;
             let wetIntervals = 0;
 
@@ -7852,14 +8072,21 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
                 feelsLikeArrC.push(calcFeelsLikeC(t, w, rh));
                 dewPointArrC.push(calcDewPointC(t, rh));
 
-                let delta = (historyData.precip_accum && historyData.precip_accum[i] != null) ? historyData.precip_accum[i] : null;
-                if (delta == null && historyData.precip && historyData.precip[i] != null) {
-                    delta = historyData.precip[i] * (5 / 60);
+                const hasAccum = !!(historyData.precip_accum && historyData.precip_accum[i] != null && !isNaN(historyData.precip_accum[i]));
+                let rawRate = (historyData.precip && historyData.precip[i] != null && !isNaN(historyData.precip[i])) ? historyData.precip[i] : null;
+                if (rawRate != null && (rawRate < 0 || rawRate > 300)) {
+                    rawRate = (hasAccum && historyData.precip_accum[i] >= 0 && historyData.precip_accum[i] <= 25)
+                        ? (historyData.precip_accum[i] * 12)
+                        : 0;
+                }
+                sanitizedPrecipRateMm.push(rawRate);
+
+                let delta = hasAccum ? historyData.precip_accum[i] : null;
+                if (delta == null && rawRate != null) {
+                    delta = rawRate * (5 / 60);
                 }
                 if (delta != null && !isNaN(delta) && delta > 0) {
                     runningCmlMm += delta;
-                    wetIntervals++;
-                } else if (historyData.precip && historyData.precip[i] > 0) {
                     wetIntervals++;
                 }
                 historyPrecipCmlMm.push(parseFloat(runningCmlMm.toFixed(3)));
@@ -7871,7 +8098,7 @@ Please generate the Home Assistant configuration (configuration.yaml) using the 
             const windArr = convertArr(historyData.wind, convertWindFromMs, windDec);
             const gustArr = convertArr(historyData.gust, convertWindFromMs, windDec);
             const pressArr = convertArr(historyData.press, convertPressFromHpa, pressDec);
-            const precipRateArr = convertArr(historyData.precip, convertPrecipFromMm, precipRateDec);
+            const precipRateArr = convertArr(sanitizedPrecipRateMm, convertPrecipFromMm, precipRateDec);
             const historyPrecipCml = convertArr(historyPrecipCmlMm, convertPrecipFromMm, precipCmlDec);
 
             // Compute Min / Avg / Max summary stats for every chart card in active units
@@ -9340,6 +9567,7 @@ static const char g_sd_csv_viewer_html[] = R"html(
             const feelsLikeArrC = [];
             const dewPointArrC = [];
             const precipCmlMm = [];
+            const sanitizedPrecipRateMm = [];
             let runningCmlMm = 0;
             let wetIntervals = 0;
 
@@ -9351,14 +9579,21 @@ static const char g_sd_csv_viewer_html[] = R"html(
                 feelsLikeArrC.push(calcCsvFeelsLike(t, w, rh));
                 dewPointArrC.push(calcCsvDewPoint(t, rh));
 
-                let delta = (precipAccumValsMm && precipAccumValsMm[i] != null) ? precipAccumValsMm[i] : null;
-                if (delta == null && precipRateValsMm && precipRateValsMm[i] != null) {
-                    delta = precipRateValsMm[i] * (5 / 60);
+                const hasAccum = !!(precipAccumValsMm && precipAccumValsMm[i] != null && !isNaN(precipAccumValsMm[i]));
+                let rawRate = (precipRateValsMm && precipRateValsMm[i] != null && !isNaN(precipRateValsMm[i])) ? precipRateValsMm[i] : null;
+                if (rawRate != null && (rawRate < 0 || rawRate > 300)) {
+                    rawRate = (hasAccum && precipAccumValsMm[i] >= 0 && precipAccumValsMm[i] <= 25)
+                        ? (precipAccumValsMm[i] * 12)
+                        : 0;
+                }
+                sanitizedPrecipRateMm.push(rawRate);
+
+                let delta = hasAccum ? precipAccumValsMm[i] : null;
+                if (delta == null && rawRate != null) {
+                    delta = rawRate * (5 / 60);
                 }
                 if (delta != null && !isNaN(delta) && delta > 0) {
                     runningCmlMm += delta;
-                    wetIntervals++;
-                } else if (precipRateValsMm && precipRateValsMm[i] > 0) {
                     wetIntervals++;
                 }
                 precipCmlMm.push(parseFloat(runningCmlMm.toFixed(3)));
@@ -9373,7 +9608,7 @@ static const char g_sd_csv_viewer_html[] = R"html(
             const dirArr = windDirVals || new Array(n).fill(null);
             const pressArr = convertArr(pressValsHpa || new Array(n).fill(null), convertPressFromHpa, pressDec);
             const solarArr = solarVals || new Array(n).fill(null);
-            const precipRateArr = convertArr(precipRateValsMm || new Array(n).fill(null), convertPrecipFromMm, precipRateDec);
+            const precipRateArr = convertArr(sanitizedPrecipRateMm, convertPrecipFromMm, precipRateDec);
             const precipCmlArr = convertArr(precipCmlMm, convertPrecipFromMm, precipCmlDec);
 
             const stTemp = calcSeriesStats(tempArr, 1);
@@ -10432,6 +10667,21 @@ static esp_err_t get_status_handler(httpd_req_t *req) {
   Utils::buff_to_hex_str(local_sn, sizeof(local_sn), local_sn_hex, sizeof(local_sn_hex));
   Utils::buff_to_hex_str(cloud_sn, sizeof(cloud_sn), cloud_sn_hex, sizeof(cloud_sn_hex));
 
+  uint8_t local_pk[WS_PUB_KEY_LEN] = {};
+  uint8_t cloud_pk[WS_PUB_KEY_LEN] = {};
+  Settings::get_ws_pubkey(local_pk, sizeof(local_pk));
+  Settings::get_cloud_ws_pubkey(cloud_pk, sizeof(cloud_pk));
+  bool local_has_pubkey = false;
+  bool cloud_has_pubkey = false;
+  for (size_t i = 0; i < WS_PUB_KEY_LEN; i++) {
+    if (local_pk[i] != 0x00 && local_pk[i] != 0xFF) local_has_pubkey = true;
+    if (cloud_pk[i] != 0x00 && cloud_pk[i] != 0xFF) cloud_has_pubkey = true;
+  }
+  bool local_sn_synthesized = (local_sn[4] == 0xAA && local_sn[5] == 0x55 &&
+                               local_sn[6] == 0xAA && local_sn[7] == 0x55);
+  bool cloud_sn_synthesized = (cloud_sn[4] == 0xAA && cloud_sn[5] == 0x55 &&
+                               cloud_sn[6] == 0xAA && cloud_sn[7] == 0x55);
+
   WsHandler::ActivityStatus activity_status = WsHandler::get_activity_status();
   // This proves that traffic matching the configured target is being decoded.
   // It does not prove which gateway a WS1300 accepts responses from; keep the
@@ -10448,10 +10698,13 @@ static esp_err_t get_status_handler(httpd_req_t *req) {
     operation_mode = "repair";
   } else if (WsHandler::is_scan_active()) {
     operation_mode = "scan";
-  } else if (WsHandler::g_manual_listen_slot >= 0) {
-    operation_mode = "listen";
   } else if (Settings::get_pair_mode() == PairMode::PAIR_MODE_OFF) {
-    operation_mode = "off";
+    operation_mode =
+        (WsHandler::g_manual_listen_slot >= 0 || WsHandler::g_sniff_mode_enabled)
+            ? "listen"
+            : "off";
+  } else if (!is_paired && WsHandler::g_manual_listen_slot >= 0) {
+    operation_mode = "listen";
   } else if (Settings::get_pair_mode() == PairMode::PAIR_MODE_CLOUD) {
     operation_mode = "cloud";
   } else if (Settings::get_pair_mode() == PairMode::PAIR_MODE_LOCAL) {
@@ -10578,8 +10831,8 @@ static esp_err_t get_status_handler(httpd_req_t *req) {
       "\"active_link\":%s,\"target_packets_seen\":%s,"
       "\"uplink_enabled\":%s,\"uplink_active\":%s,\"local_pair_sync_pending\":%s,"
       "\"local_ws_id\":%lld,\"local_ws_sn\":\"%s\",\"local_ws_type\":%d,\"local_ws_present\":%s,"
-      "\"local_ws_valid\":%s,\"local_profile_ready\":%s,"
-      "\"cloud_ws_id\":%lld,\"cloud_ws_sn\":\"%s\",\"cloud_ws_type\":%d,\"cloud_ws_valid\":%s,\"cloud_profile_ready\":%s,\"cloud_ws_match\":%s,"
+      "\"local_ws_valid\":%s,\"local_profile_ready\":%s,\"local_has_pubkey\":%s,\"local_sn_synthesized\":%s,"
+      "\"cloud_ws_id\":%lld,\"cloud_ws_sn\":\"%s\",\"cloud_ws_type\":%d,\"cloud_ws_valid\":%s,\"cloud_profile_ready\":%s,\"cloud_ws_match\":%s,\"cloud_has_pubkey\":%s,\"cloud_sn_synthesized\":%s,"
       "\"fallback_phase\":\"%s\",\"fallback_sec_remaining\":%lu,"
       "\"scan_active\":%s,\"scan_slot\":%d,\"scan_total_slots\":%u,\"scan_eta_sec\":%lu,\"scan_total_sec\":%lu,\"scan_profile\":%d,"
       "\"scan_completed\":%s,\"scan_cycle\":%u,\"scan_phase\":\"%s\","
@@ -10636,8 +10889,12 @@ static esp_err_t get_status_handler(httpd_req_t *req) {
       local_profile_present ? "true" : "false",
       local_profile_ready ? "true" : "false",
       local_profile_ready ? "true" : "false",
+      local_has_pubkey ? "true" : "false",
+      local_sn_synthesized ? "true" : "false",
       (long long)c_ws_id, cloud_sn_hex, cloud_ws_type, c_ws_valid ? "true" : "false",
       cloud_profile_ready ? "true" : "false", c_ws_match ? "true" : "false",
+      cloud_has_pubkey ? "true" : "false",
+      cloud_sn_synthesized ? "true" : "false",
       WsHandler::get_fallback_phase_name(),
       (unsigned long)WsHandler::get_fallback_seconds_remaining(),
       WsHandler::is_scan_active() ? "true" : "false",
@@ -10754,7 +11011,7 @@ static esp_err_t get_packet_log_handler(httpd_req_t *req) {
       hex_payload[pkt.length * 2] = '\0';
 
       char decoded_str[1024] = "{}";
-      WsBase::MultiStation *active_station = WsHandler::get_cur_station();
+      WsBase::MultiStation *active_station = NULL;
       uint32_t station_id_val = 0;
       bool has_station_id = false;
       uint8_t fw_version_val = 0;
@@ -11287,12 +11544,12 @@ static esp_err_t get_packet_log_handler(httpd_req_t *req) {
 
       const char *category_str = "other";
       if (decoded_ok) {
-        if (active_station != NULL || strncmp(s_type_str, "WS", 2) == 0) {
-          category_str = "weatherxm";
-        } else if (strncmp(s_type_str, "Meshtastic", 10) == 0) {
+        if (strncmp(s_type_str, "Meshtastic", 10) == 0) {
           category_str = "meshtastic";
         } else if (strncmp(s_type_str, "MeshCore", 8) == 0) {
           category_str = "meshcore";
+        } else if (active_station != NULL || strncmp(s_type_str, "WS", 2) == 0) {
+          category_str = "weatherxm";
         }
       }
 
@@ -11485,9 +11742,17 @@ static esp_err_t get_root_handler(httpd_req_t *req) {
 }
 
 // LLM & AI Agent Documentation adhering to the llms.txt standard
-static const char g_llms_txt[] = R"llm(# WeatherXM Gateway Local HTTP API
+static const char g_llms_txt[] = R"llm(# WeatherXM Gateway (WG1200) Local HTTP API
 
-> WeatherXM local weather gateway (WG1200) providing real-time weather telemetry from paired stations (WS1001, WS1300) over local REST HTTP endpoints and Zeroconf mDNS.
+> WeatherXM local weather gateway (WG1200) providing real-time and historical weather telemetry, LoRa RF diagnostics, station pairing & downlink controls, Meshtastic/MeshCore mesh broadcasting, and microSD CSV logging over local REST HTTP endpoints and Zeroconf mDNS.
+
+## Agent Operating Guidelines
+
+- **Base URL & Authentication**: Plain HTTP on port `80` (`http://<GATEWAY_IP>`). No authentication, cookies, or API keys are required.
+- **CORS**: `Access-Control-Allow-Origin: *` is set on `/llms.txt`, `/api/v1/*`, `/history`, `/live_trends`, and `/sd/*`.
+- **Control Parameters**: `POST` endpoints accept parameters via **URL query string** (e.g., `POST /set_pair_mode?mode=scan&type=1300`). `/api/v1/weather_policy` also accepts a JSON `POST` body.
+- **Units & Null Handling**: Weather observations in `/api/v1/observations`, `/status`, `/api/v1/history`, and `/live_trends` are returned in the gateway's active user units (reported in the `units` object). If no weather packet has been received yet (`"has_weather": false`) or a sensor reading is invalid, numeric fields are serialized as `null`.
+- **Asynchronous WS1300 Downlink Commands**: The WS1300 weather station wakes to transmit every ~20 seconds and listens only briefly after each uplink. Station-targeted commands (`/remote_reboot`, `/request_gps`, `/ws1300_kick_station`, `/ws1300_station_meshtastic`, `/ws1300_station_meshcore`, and weather policy sync) are **queued/armed** on the gateway (`*_pending: true` in `/status`) and delivered automatically on the next station check-in.
 
 ## Zeroconf / mDNS Discovery
 
@@ -11495,38 +11760,62 @@ static const char g_llms_txt[] = R"llm(# WeatherXM Gateway Local HTTP API
 - **Port**: `80`
 - **Domain**: `local.`
 - **Advertised TXT Records**:
-  - `id`: Stable unique hardware serial or MAC string (e.g. "WXM-12345678")
-  - `gateway_id`: Alias for stable gateway ID
-  - `model`: Gateway hardware model name (e.g. "WXM-WG1200")
-  - `api_version`: SemVer API version ("1.0.0")
-  - `sw_version`: Firmware version string (e.g. "0.8.22")
+  - `id`: Stable unique gateway identifier (e.g. `"WXM-12345678"`)
+  - `gateway_id`: Alias for `id`
+  - `model`: Gateway hardware model name (e.g. `"WXM-WG1200"`)
+  - `api_version`: SemVer API version (`"1.0.0"`)
+  - `sw_version`: Firmware version string (e.g. `"0.8.22"`)
 
-## Core REST Endpoints
+## Core Telemetry, History & RF Diagnostic Endpoints (`GET`)
 
 ### 1. Gateway Info (`GET /api/v1/info`)
-Returns stable gateway metadata, paired station configuration, Wi-Fi status, mesh parameters, and active measurement units:
+Lightweight gateway identity, Wi-Fi state, paired station summary, mesh toggles, and active measurement units:
 ```json
 {
   "id": "WXM-12345678",
   "gateway_id": "WXM-12345678",
   "model": "WXM-WG1200",
-  "fw_version": "0.8.22",
+  "hardware": "WXM-WG1200",
+  "firmware": "0.8.22",
   "api_version": "1.0.0",
+  "device_name": "WeatherXM Gateway",
   "mac": "24:DC:C3:XX:XX:XX",
-  "screenless": false,
-  "wifi": { "status": "CONNECTED", "ssid": "MyWiFi", "rssi": -58 },
-  "station": { "type": 1300, "paired_id": 142857, "pair_source": "CLOUD", "fw_version": 18, "reception": 98, "active_link": true },
-  "mesh": { "freq_region": "EU868", "listen_freq_hz": 868100000, "multi_station_fwd": false },
-  "units": { "temp": "°C", "wind": "m/s", "precip": "mm", "press": "hPa" }
+  "uptime_sec": 86400,
+  "edition": "wxm",
+  "freq_region": "EU868",
+  "station": {
+    "is_paired": true,
+    "pair_mode": "CLOUD",
+    "paired_id": 142857,
+    "station_type": 1300,
+    "station_fw_version": 18,
+    "packet_reception": 98
+  },
+  "wifi": {
+    "status": "CONNECTED",
+    "ssid": "MyWiFi",
+    "rssi": -58,
+    "ip": "192.168.1.100"
+  },
+  "mesh": {
+    "meshtastic_enabled": false,
+    "meshcore_enabled": false
+  },
+  "units": {
+    "temp": "°C",
+    "wind": "m/s",
+    "precip": "mm",
+    "press": "hPa"
+  }
 }
 ```
 
-### 2. Real-Time Observations (`GET /api/v1/observations` & `/api/v1/observation`)
+### 2. Real-Time Weather Observations (`GET /api/v1/observations` or `/api/v1/observation`)
 Returns the latest decoded weather observation:
 ```json
 {
-  "has_weather": true,
   "timestamp": 1726358400,
+  "has_weather": true,
   "temp": 21.50,
   "feels_like": 21.50,
   "humidity": 55.0,
@@ -11541,28 +11830,173 @@ Returns the latest decoded weather observation:
   "precip_24h": 2.40,
   "uv": 3,
   "irradiance": 450.00,
+  "unit_temp": "°C",
+  "unit_wind": "m/s",
+  "unit_precip": "mm",
+  "unit_press": "hPa",
   "units": { "temp": "°C", "wind": "m/s", "precip": "mm", "press": "hPa" }
 }
 ```
-Add `?buffer=full` (`GET /api/v1/observations?buffer=full`) to stream the complete 15-minute raw observation buffer array via HTTP chunked transfer.
+- **15-Minute Rolling Raw Buffer (`GET /api/v1/observations?buffer=full`)**: Streams all raw observations from the last 15 minutes (~20s resolution) via HTTP chunked transfer:
+  ```json
+  {
+    "count": 45,
+    "buffer": [
+      {
+        "timestamp": 1726357500,
+        "temp": 21.40,
+        "feels_like": 21.40,
+        "humidity": 55.0,
+        "pressure": 1013.20,
+        "wind_speed": 2.90,
+        "wind_gust": 4.10,
+        "wind_dir_deg": 175.0,
+        "wind_dir_cardinal": "S",
+        "precip_rate": 0.00,
+        "precip_daily": 0.00,
+        "precip_cml": 12.50,
+        "precip_24h": 2.40,
+        "uv": 3,
+        "irradiance": 440.00
+      }
+    ]
+  }
+  ```
 
-### 3. Historical Data (`GET /api/v1/history`)
-Returns up to 288 aggregated 5-minute historical weather buckets over the previous 24 hours:
+### 3. 24-Hour Historical Time Series (`GET /api/v1/history` or `/history`)
+Returns up to 288 5-minute aggregated buckets over the last 24 hours in **columnar parallel-array format** (all arrays have identical length; missing readings are `null`):
 ```json
-[
-  { "timestamp": 1726272000, "temp": 18.2, "humidity": 68.0, "wind_avg": 2.1, "wind_gust": 3.5, "wind_dir": 210.0, "precip": 0.0, "precip_rate": 0.0, "pressure": 1012.8, "irradiance": 120.0 }
-]
+{
+  "time": [1726272000, 1726272300],
+  "temp": [18.2, 18.4],
+  "hum": [68.0, 67.5],
+  "wind": [2.1, 2.3],
+  "gust": [3.5, 4.1],
+  "wind_dir": [210.0, 215.0],
+  "precip": [0.00, 0.00],
+  "precip_accum": [1.20, 1.20],
+  "press": [1012.8, 1012.9],
+  "solar": [120.0, 135.0]
+}
 ```
 
-### 4. Legacy Diagnostic Telemetry (`GET /status`)
-Comprehensive JSON payload with gateway status, Wi-Fi health, RF link performance, and embedded `.weather` observation.
+### 4. High-Resolution 15-Minute Live Trends (`GET /live_trends`)
+Returns the 15-minute rolling buffer (~20s cadence) as parallel arrays:
+```json
+{
+  "time": [1726357500, 1726357520],
+  "temp": [21.4, 21.5],
+  "wind_speed": [2.9, 3.2],
+  "wind_dir": [175.0, 180.0],
+  "wind_gust": [4.1, 4.5],
+  "humidity": [55.0, 55.0],
+  "pressure": [1013.2, 1013.3],
+  "solar_rad": [440.0, 450.0],
+  "precip_rate": [0.00, 0.00]
+}
+```
+
+### 5. Comprehensive Gateway & RF Status (`GET /status`)
+Single-call diagnostic payload combining system health, Wi-Fi, MQTT uplink, pairing & ownership state machine, discovered stations, radio tuning, Mesh/Adaptive policy state, microSD status, units, and the current `.weather` snapshot:
+- **System & Connectivity**: `wifi_status`, `wifi_ssid`, `wifi_rssi`, `uptime_sec`, `fw_version`, `dev_name`, `edition` (`"wxm"`|`"open"`), `is_open_edition`, `is_screenless`, `mqtt_status`, `mqtt_success_count`, `mqtt_fail_count`, `mqtt_disabled`.
+- **Pairing & Link Health**: `is_paired`, `paired_id`, `station_type` (`1300`|`1001`|`0`), `station_fw_ver`, `pair_mode` (`"OFF"`|`"CLOUD"`|`"LOCAL"`|`"SCAN"`), `pair_source`, `active_source`, `operation_mode`, `pairing_state`, `ownership_status`, `active_link`, `lora_link_ok`, `packet_reception` (0–100%), `activity_status`, `activity_duration_sec`, `rx_packet_total`.
+- **Profiles & Scanner**: `local_ws_id`, `local_ws_sn`, `local_ws_type`, `local_profile_ready`, `cloud_ws_id`, `cloud_ws_sn`, `cloud_ws_type`, `cloud_profile_ready`, `cloud_ws_match`, `fallback_phase`, `fallback_sec_remaining`, `scan_active`, `scan_slot`, `scan_total_slots`, `scan_eta_sec`, `scan_profile`, `scan_phase`, `recent_stations` (array of `{id, type, sn, has_sn, has_pubkey, pubkey, pairable, packet_type, age_sec, rssi, snr, channel_slot}`).
+- **Radio & Pending WS1300 Downlink Commands**: `freq_region` (`868`|`915`|`923`|`916`|`865`), `region_base_hz`, `listen_freq_hz`, `listen_desc`, `manual_slot`, `sniff_mode`, `tx_power_override`, `tx_interval_override`, `ws1300_reboot_pending`, `ws1300_gps_req_pending`, `ws1300_kick_armed`.
+- **Mesh & Adaptive Policy**: `station_meshtastic_interval_min`, `station_meshtastic_preset`, `station_meshtastic_hop_limit`, `station_meshtastic_command_pending`, `mesh_forwarding_enabled`, `station_meshcore_interval_min`, `station_meshcore_profile_idx`, `station_meshcore_command_pending`, `policy_ver`, `policy_crc`, `policy_crc_hex`, `station_policy_pending`, `mt_events_hour`, `mt_cooldown_lvl`, `mt_last_reasons`, `mc_events_hour`, `mc_cooldown_lvl`, `mc_last_reasons`.
+- **microSD & Weather**: `sd_mounted`, `sd_present`, `sd_ejected`, `sd_unusable`, `sd_capacity_gb`, `sd_fs_type`, `sd_status_reason`, `units`, `pressure_hpa` (always hPa), and `weather` (`has_weather`, `temp`, `feels_like`, `humidity`, `precip_rate`, `precip_daily`, `precip_cml`, `precip_24h`, `pressure`, `wind_speed`, `wind_gust`, `wind_dir_deg`, `wind_dir_cardinal`, `uv`, `irradiance`, `unit_temp`, `unit_wind`, `unit_precip`, `unit_press`).
+
+### 6. Live LoRa Packet Log (`GET /packet_log`)
+Returns a JSON array of the last 20 demodulated or transmitted LoRa packets:
+```json
+[
+  {
+    "time": 1726358400,
+    "rssi": -72,
+    "snr": 9,
+    "filtered": false,
+    "is_tx": false,
+    "tx_power_dbm": 0,
+    "category": "PAIRED",
+    "data": "a301...",
+    "decoded": { "Temperature": 21.50, "Humidity": 55.00 },
+    "station_type": "WS1300",
+    "station_id": "0x00022E09",
+    "protocol_version": "v18 (0x12)",
+    "channel_slot": 3,
+    "freq_hz": 868100000,
+    "freq_str": "868.10 MHz",
+    "specs_str": "SF9 · BW 125kHz · CR 4/5",
+    "packet_type": "Sensors"
+  }
+]
+```
+- `category` values: `"PAIRED"`, `"UNPAIRED"`, `"NEIGHBOR"`, `"GW_TX"`, `"MESH_TX"`, `"MESHCORE_TX"`, `"MESH_RX"`, `"MESHCORE_RX"`.
+
+## Configuration & Control Endpoints (`GET` / `POST`)
+
+### Measurement Units
+- `GET /api/v1/units` — Returns active unit IDs and symbols (`temp`, `wind`, `precip`, `press`).
+- `POST /api/v1/units` (alias `POST /set_units`) — Updates display and API telemetry units via query params:
+  - `temp`: `C` | `F` (or `0` | `1`)
+  - `wind`: `m/s` | `km/h` | `mph` | `ft/s` | `bft` | `kn` (or `0`..`5`)
+  - `precip`: `mm` | `in` (or `0` | `1`)
+  - `press`: `hPa` | `mmHg` | `inHg` (or `0`..`2`)
+  - Example: `curl -X POST "http://<GATEWAY_IP>/api/v1/units?temp=C&wind=km/h&precip=mm&press=hPa"`
+
+### Pairing & Station Management
+- `POST /set_pair_mode?mode=off|cloud|local|scan[&id=0x...&slot=0..8&type=1300|1001|all]` — Switches gateway pairing mode:
+  - `cloud`: Follow WeatherXM Cloud station assignment (falls back to scan/local if unconfigured).
+  - `local`: Lock onto the saved local station profile.
+  - `scan`: Actively sweep channels to discover and auto-pair a station (optionally filtered by `id`, `slot`, and `type`).
+  - `off`: Disable pairing.
+- `POST /pair_local?id=0x...&type=1300|1001[&slot=0..8]` — Saves a discovered station (from `/status` `recent_stations`) into LOCAL NVS and switches immediately to `LOCAL` mode.
+- `POST /copy_cloud_to_local` — Copies the provisioned CLOUD station profile into LOCAL NVS and activates `LOCAL` mode.
+- `POST /unpair` — Unpairs the current station and resets receiver profile to `ALL`.
+- `POST /force_pair?id=0x...[&sn=<20-hex>&pubkey=<128-hex>]` — Diagnostic direct LOCAL profile creation for a WS1300 station ID without waiting for an over-the-air `BOOT`/`ADV` handshake.
+- `POST /clear_local` — Clears the saved LOCAL NVS station profile (`ws_id`, `ws_sn`, `ws_pubkey`) and switches to `CLOUD` if a Cloud profile is configured (or unpairs if not).
+- `POST /clear_recent` — Clears the `recent_stations` discovery list.
+- `POST /set_cloud_pairing?enable=1|0` — Enables or disables cloud pairing mode.
+- `POST /toggle_autopair[?enable=1|0]` — Enables or disables automatic scan pairing.
+
+### Radio, Sniffer & WS1300 Downlink Controls
+- `POST /set_region?region=868|915|923|916|865` — Sets LoRa ISM frequency region (`868`=EU868, `915`=US915, `923`=AS923, `916`=IL916, `865`=IN865) and retunes the radio.
+- `POST /toggle_sniff` — Toggles RF sniffer mode (`{"sniff_mode": true|false}`) to decode all heard stations.
+- `POST /set_station?type=1300|1001|0` — Sets receiver profile when unpaired (`1300`=WS1300, `1001`=WS1001, `0`=all). Use `?scope=1300|1001|0` to change scan scope.
+- `POST /set_channel?slot=-1..8` — Locks receiver to a specific channel slot (`-1`=auto, `0`=WS1001 base, `1..8`=WS1300 ch 0–7).
+- `POST /set_tx_power?dbm=0..22` — Overrides paired WS1300 TX power (`0`=auto adaptive algorithm, or fixed dBm).
+- `POST /set_tx_interval?sec=0|20..240` — Overrides paired WS1300 uplink interval in multiples of 20s (`0`=default 20s).
+- `POST /remote_reboot?enable=1|0` — Arms (`1`) or cancels (`0`) a remote reboot command for the paired WS1300 (delivered on next check-in).
+- `POST /request_gps` — Arms an immediate GNSS fix acquisition command for the paired WS1300 (delivered on next check-in).
+- `POST /ws1300_kick_station[?id=0x...&cancel=1]` — Arms a one-shot LoRa reboot for a sniffed WS1300 paired to this gateway's serial so it emits a pairable `BOOT` frame.
+- `POST /toggle_mqtt` — Toggles WeatherXM MQTT cloud telemetry (Open Edition firmware only; returns `403` on WXM edition).
+
+### Meshtastic, MeshCore & Adaptive Weather Policy
+- `GET /api/v1/meshtastic/config` — Returns gateway & station Meshtastic configuration, regional presets, and adaptive evaluator counters.
+- `POST /api/v1/meshtastic/config?enabled=true|false&interval=60..3600&preset=0..8&hop_limit=0..7&multi_fwd=true|false[&freq_hz=...&bw_khz=...&sf=7..12&cr=5..8&tx_power=-9..22]` — Configures gateway Meshtastic broadcasting (`preset=8` enables custom LoRa parameters).
+- `POST /api/v1/meshtastic/send_telemetry` (alias `/api/v1/mesh/send_telemetry`, accepts `GET` or `POST`, optional `?node_info=true&position=true`) — Immediately transmits a Meshtastic telemetry burst over LoRa.
+- `POST /ws1300_station_meshtastic?interval=0..60[&cancel=1]` — Queues a command to set the autonomous Meshtastic beacon interval in minutes (`0`=off) directly on a paired WS1300 station (requires WS1300 FW v15+).
+- `GET /api/v1/meshcore/config` — Returns gateway & station MeshCore configuration, regional profiles, and adaptive evaluator counters.
+- `POST /api/v1/meshcore/config?gw_enabled=true|false&gw_interval=60..3600&profile=0..10[&freq_hz=...&bw_khz=...&sf=7..12&cr=5..8&tx_power=-9..22]` — Configures gateway MeshCore broadcasting (`profile=10` enables custom LoRa parameters).
+- `POST /api/v1/meshcore/send_telemetry` (accepts `GET` or `POST`) — Immediately transmits a MeshCore `GRP_DATA` weather frame.
+- `POST /ws1300_station_meshcore?interval=0..60[&cancel=1]` — Queues a command to set the autonomous MeshCore beacon interval in minutes (`0`=off) on a paired WS1300 station (requires WS1300 FW v16+).
+- `GET /api/v1/weather_policy` & `POST /api/v1/weather_policy` — Reads or updates the adaptive weather-change trigger policy used for event-driven mesh broadcasts (supports `?reset=1` to restore defaults, `?cancel_sync=1` to disarm station sync, or query/JSON threshold fields).
+
+### microSD Card Logging (Display Gateways)
+- `GET /sd/status` — Returns card presence, mount state, filesystem type, capacity, free space, active daily CSV filename, and logged row count.
+- `GET /sd/list` — Lists daily `.csv` log files (`{"mounted":true,"files":[{"name":"2026-10-24.csv","size":14200}]}`).
+- `GET /sd/download?file=<name.csv>[&preview=1]` — Downloads a daily CSV weather log (`preview=1` streams up to 64 KB as `text/plain`).
+- `GET /sd/view?file=<name.csv>` — Interactive HTML/uPlot chart viewer for a CSV log file.
+- `POST /sd/mount` & `POST /sd/eject` — Remounts or safely unmounts the microSD card for removal.
+- `POST /sd/delete?file=<name.csv>` — Deletes a specific CSV file.
+- `POST /sd/format` — Formats the microSD card as FAT32 (destructive).
+- `GET /sd/diagnose` & `GET /sd/test` — Runs SD bus pin diagnostics or a read/write verification test.
 
 ## Home Assistant Integration
 
-### Auto-Discovery (Recommended):
-Home Assistant automatically discovers `_weatherxm._tcp` via Zeroconf. When prompted in **Settings > Devices & Services**, confirm setup.
+### Auto-Discovery (Recommended)
+Home Assistant automatically discovers `_weatherxm._tcp.local.` via Zeroconf. Confirm setup in **Settings > Devices & Services**.
 
-### Manual REST Sensor Configuration (`configuration.yaml`):
+### Manual REST Sensor Configuration (`configuration.yaml`)
 ```yaml
 rest:
   - resource: http://<GATEWAY_IP>/api/v1/observations
@@ -11626,21 +12060,13 @@ rest:
         value_template: "{{ value_json.uv }}"
         state_class: measurement
 ```
-
-## Additional Diagnostic Endpoints
-
-- GET `/packet_log`: Returns rolling buffer of recently demodulated LoRa packets with RSSI/SNR and decoded fields.
-- POST `/toggle_sniff`: Enables/disables RF sniffer mode to listen to all nearby stations without pairing.
-- POST `/set_station?type=1300|1001|0`: Sets station receiver profile (1300 = WS1300 Multi-Channel, 1001 = WS1001 Single Channel, 0 = all/sweep).
-- POST `/set_channel?slot=-1..8`: Manually sets RF channel slot (-1 = auto sweep).
-- GET `/api/v1/meshtastic/config`: Reads Meshtastic environmental telemetry beacon settings.
-- POST `/api/v1/meshtastic/config?enabled=true|false&interval=300..3600`: Configures Meshtastic beacon.
 )llm";
 
 // GET /llms.txt and /llms-full.txt handler
 static esp_err_t get_llms_handler(httpd_req_t *req) {
   g_last_web_request_ts = Utils::get_tick_sec();
   httpd_resp_set_type(req, "text/plain; charset=utf-8");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   httpd_resp_send(req, g_llms_txt, strlen(g_llms_txt));
   return ESP_OK;
 }
@@ -11932,8 +12358,9 @@ static esp_err_t post_set_pair_mode_handler(httpd_req_t *req) {
     return ESP_FAIL;
   }
 
-  // Reset fallback state machine so recovery timers start fresh on the selected mode
-  WsHandler::reset_fallback_state_machine();
+  // Manual mode selection via Web UI locks the fallback state machine so the
+  // gateway stays on the user's chosen target without timing out after 300s.
+  WsHandler::set_fallback_phase(WsHandler::AutoFallbackPhase::PHASE_MANUAL);
 
   ESP_LOGI(TAG, "Pair mode set via Web: %s (scan profile: %d)",
            Utils::pair_mode_to_str(mode), (int)WsHandler::g_scan_profile);
@@ -12214,7 +12641,7 @@ static esp_err_t post_copy_cloud_to_local_handler(httpd_req_t *req) {
   }
 
   WsHandler::apply_pair_mode(PairMode::PAIR_MODE_LOCAL);
-  WsHandler::reset_fallback_state_machine();
+  WsHandler::set_fallback_phase(WsHandler::AutoFallbackPhase::PHASE_MANUAL);
 
   char resp[96];
   snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"copied\":true}");
@@ -12542,7 +12969,7 @@ static esp_err_t post_pair_local_handler(httpd_req_t *req) {
   Settings::commit_blocking();
 
   RetResult ret = WsHandler::apply_pair_mode(PairMode::PAIR_MODE_LOCAL, station_id, (int8_t)target_slot, ws_t);
-  WsHandler::reset_fallback_state_machine();
+  WsHandler::set_fallback_phase(WsHandler::AutoFallbackPhase::PHASE_MANUAL);
   ESP_LOGI(TAG, "Pair to Local NVS: station ID 0x%08lX (type %d, slot %d) ret=%d",
            (unsigned long)station_id, station_type, target_slot, (int)ret);
 
@@ -12557,6 +12984,26 @@ static esp_err_t post_pair_local_handler(httpd_req_t *req) {
 static esp_err_t post_clear_recent_handler(httpd_req_t *req) {
   g_last_web_request_ts = Utils::get_tick_sec();
   WsHandler::clear_recent_stations();
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_send(req, "{\"status\":\"ok\"}", 15);
+  return ESP_OK;
+}
+
+static esp_err_t post_clear_local_handler(httpd_req_t *req) {
+  g_last_web_request_ts = Utils::get_tick_sec();
+  Settings::clear_local_ws_profile();
+  Settings::commit_blocking();
+
+  if (Settings::cloud_ws_profile_ready()) {
+    WsHandler::apply_pair_mode(PairMode::PAIR_MODE_CLOUD, (uint32_t)Settings::get_cloud_ws_id());
+    WsHandler::set_fallback_phase(WsHandler::AutoFallbackPhase::PHASE_MANUAL);
+    ESP_LOGI(TAG, "Cleared Local NVS profile; switched active target to Cloud (0x%08X)",
+             (unsigned int)Settings::get_cloud_ws_id());
+  } else {
+    WsHandler::unpair();
+    ESP_LOGI(TAG, "Cleared Local NVS profile; no Cloud profile ready -> unpaired");
+  }
+
   httpd_resp_set_type(req, "application/json");
   httpd_resp_send(req, "{\"status\":\"ok\"}", 15);
   return ESP_OK;
@@ -13898,7 +14345,7 @@ esp_err_t start() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
   config.ctrl_port = 32768;
-  config.max_uri_handlers = 80;
+  config.max_uri_handlers = 84;
   config.lru_purge_enable = true;
   config.task_priority = 6;
   config.stack_size = 16384;
@@ -14076,6 +14523,12 @@ esp_err_t start() {
                                   .handler = post_clear_recent_handler,
                                   .user_ctx = NULL};
   httpd_register_uri_handler(_server_handle, &uri_clear_recent);
+
+  httpd_uri_t uri_clear_local = {.uri = "/clear_local",
+                                 .method = HTTP_POST,
+                                 .handler = post_clear_local_handler,
+                                 .user_ctx = NULL};
+  httpd_register_uri_handler(_server_handle, &uri_clear_local);
 
   httpd_uri_t uri_history = {.uri = "/history",
                              .method = HTTP_GET,

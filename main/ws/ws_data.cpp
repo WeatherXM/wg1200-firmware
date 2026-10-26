@@ -78,6 +78,12 @@ float _newest_bucket_tip_event_cml = 0.0f;
 u32 _newest_bucket_tip_event_ts = 0;
 float _oldest_bucket_tip_event_cml = 0.0f;
 u32 _oldest_bucket_tip_event_ts = 0;
+static uint32_t _precip_rate_station_id = 0;
+
+// Upper physical bound for valid precipitation rate (mm/h) and single-packet tip delta (mm).
+// Protects against cross-station cumulative counter jumps and post-boot short-interval spikes.
+static constexpr float MAX_VALID_PRECIP_RATE_MM_H = 300.0f;
+static constexpr float MAX_SINGLE_PACKET_PRECIP_DELTA_MM = 25.4f;
 
 /** Daily precipitation tracking parameters (resets at 00:00 local time) */
 static float _daily_baseline_cml = NAN;
@@ -85,6 +91,7 @@ static float _daily_accum_rollover = 0.0f;
 static int32_t _daily_current_day_idx = -1;
 static float _daily_precip_cached = 0.0f;
 static time_t _daily_baseline_ts = 0;
+static uint32_t _daily_precip_station_id = 0;
 
 static DailyExtremes _daily_extremes;
 static int32_t _daily_extremes_day_idx = -1;
@@ -147,7 +154,7 @@ static void build_persisted_daily_state(PersistedDailyState *state)
 {
 	memset(state, 0, sizeof(*state));
 	state->magic = DAILY_STATE_MAGIC;
-	state->ws_id = Settings::get_ws_id();
+	state->ws_id = (_daily_precip_station_id != 0) ? _daily_precip_station_id : Settings::get_ws_id();
 	state->precip_day_idx = _daily_current_day_idx;
 	state->baseline_cml = _daily_baseline_cml;
 	state->accum_rollover = _daily_accum_rollover;
@@ -290,6 +297,7 @@ static void ensure_daily_state_loaded()
 		_daily_accum_rollover = isfinite(state.accum_rollover) ? state.accum_rollover : 0.0f;
 		_daily_precip_cached = isfinite(state.precip_cached) ? state.precip_cached : 0.0f;
 		_daily_baseline_ts = (time_t)state.baseline_ts;
+		_daily_precip_station_id = state.ws_id;
 		ESP_LOGI(TAG, "Restored daily rain state from %s for day %ld: baseline=%.2f mm, cached=%.2f mm",
 			source_label, (long)_daily_current_day_idx, _daily_baseline_cml, _daily_precip_cached);
 	}
@@ -298,6 +306,11 @@ static void ensure_daily_state_loaded()
 	{
 		_daily_extremes_day_idx = state.extremes_day_idx;
 		_daily_extremes = state.extremes;
+		if(!isnan(_daily_extremes.precip_rate_max) &&
+		   (_daily_extremes.precip_rate_max < 0.0f || _daily_extremes.precip_rate_max > MAX_VALID_PRECIP_RATE_MM_H))
+		{
+			_daily_extremes.precip_rate_max = NAN;
+		}
 		ESP_LOGI(TAG, "Restored daily extremes from %s for day %ld", source_label, (long)_daily_extremes_day_idx);
 	}
 
@@ -563,9 +576,37 @@ WsCommon::RetRes update_precip_rate_params(WsFields::FieldPack *field_pack)
 	{
 		return ret;
 	}
-	if(!isfinite(precip_cml))
+	if(!isfinite(precip_cml) || precip_cml < 0.0f)
 	{
 		return WsCommon::RetRes::ERROR_BAD_RESULT;
+	}
+
+	uint32_t pkt_sta_id = 0;
+	WsFields::get_field_val_from_pack(field_pack, WsFields::FieldType::META_ID, NULL, &pkt_sta_id);
+
+	if(pkt_sta_id != 0 && _precip_rate_station_id != 0 && pkt_sta_id != _precip_rate_station_id)
+	{
+		ESP_LOGW(TAG, "Station ID changed (0x%08lX -> 0x%08lX); resetting precip rate state",
+			(unsigned long)_precip_rate_station_id, (unsigned long)pkt_sta_id);
+		reset_precip_rate_state();
+	}
+	if(pkt_sta_id != 0)
+	{
+		_precip_rate_station_id = pkt_sta_id;
+	}
+
+	if(pkt_sta_id != 0 && _daily_precip_station_id != 0 && pkt_sta_id != _daily_precip_station_id)
+	{
+		ESP_LOGW(TAG, "Station ID changed (0x%08lX -> 0x%08lX); re-anchoring daily rain baseline to %.2f mm (preserving %.2f mm)",
+			(unsigned long)_daily_precip_station_id, (unsigned long)pkt_sta_id, precip_cml, _daily_precip_cached);
+		_daily_accum_rollover = _daily_precip_cached;
+		_daily_baseline_cml = precip_cml;
+		_daily_precip_station_id = pkt_sta_id;
+		save_daily_state_to_nvs(true);
+	}
+	else if(pkt_sta_id != 0)
+	{
+		_daily_precip_station_id = pkt_sta_id;
 	}
 
 	// Update daily cumulative rain tracker with the latest valid counter
@@ -596,6 +637,32 @@ WsCommon::RetRes update_precip_rate_params(WsFields::FieldPack *field_pack)
 		_init_tip_bucket_event_cml = precip_cml;
 		_init_tip_bucket_event_ts = now_tick;
 		return WsCommon::RetRes::OK;
+	}
+
+	// Reject unphysical single-packet cumulative jumps (e.g. >25.4 mm in one packet)
+	// by re-anchoring the baseline rather than computing a multi-thousand mm/h spike.
+	float ref_cml = (_newest_bucket_tip_event_ts != 0)
+		? _newest_bucket_tip_event_cml
+		: ((_oldest_bucket_tip_event_ts != 0) ? _oldest_bucket_tip_event_cml : _init_tip_bucket_event_cml);
+	if((precip_cml - ref_cml) > MAX_SINGLE_PACKET_PRECIP_DELTA_MM)
+	{
+		ESP_LOGW(TAG, "Unphysical cumulative precip jump (%.2f -> %.2f mm); re-anchoring precip rate baseline",
+			ref_cml, precip_cml);
+		reset_precip_rate_state();
+		_init_tip_bucket_event_cml = precip_cml;
+		_init_tip_bucket_event_ts = now_tick;
+		return WsCommon::RetRes::OK;
+	}
+
+	// If previous tip events have completely decayed (>1h ago), reset to dry baseline
+	// so the first tip of a new rain event uses Case 1 instead of dividing by a multi-hour dry gap.
+	uint32_t last_tip_ts = (_newest_bucket_tip_event_ts != 0) ? _newest_bucket_tip_event_ts : _oldest_bucket_tip_event_ts;
+	if(last_tip_ts != 0 && now_tick > last_tip_ts &&
+	   (now_tick - last_tip_ts) >= (uint32_t)WS_DATA_PRECIP_RATE_DECAY_TIMEOUT_SEC)
+	{
+		reset_precip_rate_state();
+		_init_tip_bucket_event_cml = ref_cml;
+		_init_tip_bucket_event_ts = last_tip_ts;
 	}
 
 	if(precip_cml == _init_tip_bucket_event_cml) return WsCommon::RetRes::OK;
@@ -651,20 +718,23 @@ float get_precip_rate()
 		if(elapsed_since_tip >= (uint32_t)WS_DATA_PRECIP_RATE_DECAY_TIMEOUT_SEC) return 0.0f;
 
 		float tip_delta = _oldest_bucket_tip_event_cml - _init_tip_bucket_event_cml;
-		if (tip_delta <= 0.0f) tip_delta = 0.254f;
+		if (tip_delta <= 0.0f || tip_delta > MAX_SINGLE_PACKET_PRECIP_DELTA_MM) tip_delta = 0.254f;
 
 		uint32_t init_interval = (_oldest_bucket_tip_event_ts > _init_tip_bucket_event_ts)
 			? (_oldest_bucket_tip_event_ts - _init_tip_bucket_event_ts) : 0;
 		if (init_interval > 0 && init_interval < (uint32_t)WS_DATA_PRECIP_RATE_DECAY_TIMEOUT_SEC)
 		{
 			uint32_t elapsed_sec = init_interval + elapsed_since_tip;
-			float rate = 3600.0f * tip_delta / elapsed_sec;
-			return isfinite(rate) ? rate : 0.0f;
+			uint32_t effective_window = elapsed_sec > 120 ? elapsed_sec : 120;
+			float rate = 3600.0f * tip_delta / effective_window;
+			if (!isfinite(rate) || rate < 0.0f || rate > MAX_VALID_PRECIP_RATE_MM_H) return 0.0f;
+			return rate;
 		}
 
 		uint32_t effective_window = elapsed_since_tip > 120 ? elapsed_since_tip : 120;
 		float rate = 3600.0f * tip_delta / effective_window;
-		return isfinite(rate) ? rate : 0.0f;
+		if (!isfinite(rate) || rate < 0.0f || rate > MAX_VALID_PRECIP_RATE_MM_H) return 0.0f;
+		return rate;
 	}
 
 	// Case 2: At least two tip events recorded
@@ -677,10 +747,12 @@ float get_precip_rate()
 	uint32_t bucket_tip_event_ts_delta = _newest_bucket_tip_event_ts - _oldest_bucket_tip_event_ts;
 	uint32_t current_time_delta = now - _newest_bucket_tip_event_ts;
 	uint32_t elapsed_sec = bucket_tip_event_ts_delta + current_time_delta;
-	if(elapsed_sec == 0 || bucket_tip_event_cml_delta < 0.0f) return 0.0f;
+	if(elapsed_sec == 0 || bucket_tip_event_cml_delta <= 0.0f ||
+	   bucket_tip_event_cml_delta > MAX_SINGLE_PACKET_PRECIP_DELTA_MM) return 0.0f;
 
 	float rate = 3600.0f * bucket_tip_event_cml_delta / elapsed_sec;
-	return isfinite(rate) ? rate : 0.0f;
+	if (!isfinite(rate) || rate < 0.0f || rate > MAX_VALID_PRECIP_RATE_MM_H) return 0.0f;
+	return rate;
 }
 
 void reset_daily_precip()
@@ -875,12 +947,13 @@ void update_daily_extremes(const WsFields::FieldPack* field_pack)
 	}
 
 	float rate = 0.0f;
-	if(WsFields::get_field_val_from_pack(const_cast<WsFields::FieldPack*>(field_pack), WsFields::FieldType::WEATHER_PRECIP_RATE, NULL, &rate) == WsCommon::RetRes::OK && isfinite(rate))
+	if(WsFields::get_field_val_from_pack(const_cast<WsFields::FieldPack*>(field_pack), WsFields::FieldType::WEATHER_PRECIP_RATE, NULL, &rate) == WsCommon::RetRes::OK &&
+	   isfinite(rate) && rate >= 0.0f && rate <= MAX_VALID_PRECIP_RATE_MM_H)
 	{
 		if(isnan(_daily_extremes.precip_rate_max) || rate > _daily_extremes.precip_rate_max) { _daily_extremes.precip_rate_max = rate; changed = true; }
 	}
 	float live_rate = get_precip_rate();
-	if(isfinite(live_rate))
+	if(isfinite(live_rate) && live_rate >= 0.0f && live_rate <= MAX_VALID_PRECIP_RATE_MM_H)
 	{
 		if(isnan(_daily_extremes.precip_rate_max) || live_rate > _daily_extremes.precip_rate_max) { _daily_extremes.precip_rate_max = live_rate; changed = true; }
 	}
@@ -958,7 +1031,7 @@ DailyExtremes get_daily_extremes()
 					if(isnan(res.wind_gust_max) || agg.wind_gust_max > res.wind_gust_max) res.wind_gust_max = agg.wind_gust_max;
 					res.has_data = true;
 				}
-				if(!isnan(agg.precip_avg))
+				if(!isnan(agg.precip_avg) && agg.precip_avg >= 0.0f && agg.precip_avg <= MAX_VALID_PRECIP_RATE_MM_H)
 				{
 					if(isnan(res.precip_rate_max) || agg.precip_avg > res.precip_rate_max) res.precip_rate_max = agg.precip_avg;
 				}

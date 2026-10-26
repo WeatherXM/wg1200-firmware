@@ -407,7 +407,11 @@ void reset_fallback_state_machine()
 {
 	_fallback_manual_override = false;
 	_fallback_phase_start_ms = Utils::get_tick_ms();
-	if (Settings::local_ws_profile_ready())
+	if (Settings::get_pair_mode() == PairMode::PAIR_MODE_CLOUD && Settings::cloud_ws_profile_ready())
+	{
+		_fallback_phase = AutoFallbackPhase::PHASE_CLOUD_NVS;
+	}
+	else if (Settings::local_ws_profile_ready())
 	{
 		_fallback_phase = AutoFallbackPhase::PHASE_LOCAL_NVS;
 	}
@@ -435,7 +439,7 @@ const char* get_pairing_state_name()
 		return "monitor_only";
 	}
 
-	if (is_scan_active() || g_manual_listen_slot >= 0 || get_pair_state() != PairState::PAIRED)
+	if (is_scan_active() || get_pair_state() != PairState::PAIRED)
 	{
 		return "standby_discovery";
 	}
@@ -1377,7 +1381,21 @@ RetResult init()
 	Settings::set_pair_mode(boot_mode);
 	ESP_LOGW(TAG, "FALLBACK_TEST_PHASE_4_ONLY: Boot fallback -> Phase 4 WS1300 Sweep (CH0-CH7, 2 min per channel)");
 #else
-	if (has_local)
+	if ((boot_mode == PairMode::PAIR_MODE_CLOUD || Settings::get_pair_source() == PairSource::PAIR_SOURCE_CLOUD) && has_cloud)
+	{
+		_fallback_phase = AutoFallbackPhase::PHASE_CLOUD_NVS;
+		boot_source = PairSource::PAIR_SOURCE_CLOUD;
+		if (boot_mode != PairMode::PAIR_MODE_OFF)
+		{
+			boot_mode = PairMode::PAIR_MODE_CLOUD;
+		}
+		boot_paired = true;
+		Settings::set_pair_source(PairSource::PAIR_SOURCE_CLOUD);
+		Settings::set_pair_mode(boot_mode);
+		ESP_LOGI(TAG, "Boot fallback (Phase 2 preferred): Using Cloud profile (0x%08X)",
+			(unsigned int)Settings::get_cloud_ws_id());
+	}
+	else if (has_local)
 	{
 		_fallback_phase = AutoFallbackPhase::PHASE_LOCAL_NVS;
 		boot_source = PairSource::PAIR_SOURCE_LOCAL;
@@ -1581,7 +1599,7 @@ static void process_fallback_state_machine(ActivityStatus cur_status)
 		if (cur_status == ActivityStatus::INACTIVE)
 		{
 			// Previously latched station is silent for 5 minutes (WS_LOST_TIMEOUT_MS)
-			// Advance to next fallback phase
+			// Only alternate between configured NVS profiles; never auto-pair a neighbor station when a profile is already configured.
 			if (_active_pair_source == PairSource::PAIR_SOURCE_LOCAL &&
 			    Settings::cloud_ws_profile_ready() &&
 			    Settings::get_cloud_ws_id() != Settings::get_ws_id())
@@ -1590,6 +1608,23 @@ static void process_fallback_state_machine(ActivityStatus cur_status)
 				_fallback_phase = AutoFallbackPhase::PHASE_CLOUD_NVS;
 				_fallback_phase_start_ms = now_ms;
 				apply_pair_mode(PairMode::PAIR_MODE_CLOUD, (uint32_t)Settings::get_cloud_ws_id());
+			}
+			else if (_active_pair_source == PairSource::PAIR_SOURCE_CLOUD &&
+			         Settings::local_ws_profile_ready() &&
+			         Settings::get_ws_id() != Settings::get_cloud_ws_id())
+			{
+				ESP_LOGW(TAG, "Fallback: Active Cloud station silent for 5 min, failing over to Local NVS target");
+				_fallback_phase = AutoFallbackPhase::PHASE_LOCAL_NVS;
+				_fallback_phase_start_ms = now_ms;
+				apply_pair_mode(PairMode::PAIR_MODE_LOCAL, (uint32_t)Settings::get_ws_id());
+			}
+			else if (Settings::local_ws_profile_ready() || Settings::cloud_ws_profile_ready())
+			{
+				// Stay locked on configured NVS target without entering blind WS1001/WS1300 auto-pair scan
+				_fallback_phase = (_active_pair_source == PairSource::PAIR_SOURCE_CLOUD)
+					? AutoFallbackPhase::PHASE_CLOUD_NVS
+					: AutoFallbackPhase::PHASE_LOCAL_NVS;
+				_fallback_phase_start_ms = now_ms;
 			}
 			else
 			{
@@ -1626,15 +1661,20 @@ static void process_fallback_state_machine(ActivityStatus cur_status)
 		{
 			if (elapsed_ms >= FALLBACK_PHASE_DURATION_MS)
 			{
-				ESP_LOGW(TAG, "Fallback: Phase 1 (Local NVS) 5-minute window expired with no packets.");
 				_fallback_phase_start_ms = now_ms;
 				if (Settings::cloud_ws_profile_ready() &&
 				    Settings::get_cloud_ws_id() != Settings::get_ws_id())
 				{
 					_fallback_phase = AutoFallbackPhase::PHASE_CLOUD_NVS;
-					ESP_LOGI(TAG, "Fallback: Advancing to Phase 2 (Cloud NVS: 0x%08X)",
+					ESP_LOGI(TAG, "Fallback: Phase 1 (Local NVS) 5-min window expired; checking Phase 2 (Cloud NVS: 0x%08X)",
 						(unsigned int)Settings::get_cloud_ws_id());
 					apply_pair_mode(PairMode::PAIR_MODE_CLOUD, (uint32_t)Settings::get_cloud_ws_id());
+				}
+				else if (Settings::local_ws_profile_ready())
+				{
+					// Stay locked on configured Local NVS station; do not enter blind auto-pair scan that would overwrite Local NVS
+					ESP_LOGI(TAG, "Fallback: Staying locked on configured Local NVS station (0x%08X)",
+						(unsigned int)Settings::get_ws_id());
 				}
 				else
 				{
@@ -1657,18 +1697,34 @@ static void process_fallback_state_machine(ActivityStatus cur_status)
 		{
 			if (elapsed_ms >= FALLBACK_PHASE_DURATION_MS)
 			{
-				ESP_LOGW(TAG, "Fallback: Phase 2 (Cloud NVS) 5-minute window expired with no packets.");
 				_fallback_phase_start_ms = now_ms;
+				if (Settings::local_ws_profile_ready() &&
+				    Settings::get_ws_id() != Settings::get_cloud_ws_id())
+				{
+					_fallback_phase = AutoFallbackPhase::PHASE_LOCAL_NVS;
+					ESP_LOGI(TAG, "Fallback: Phase 2 (Cloud NVS) 5-min window expired; checking Phase 1 (Local NVS: 0x%08X)",
+						(unsigned int)Settings::get_ws_id());
+					apply_pair_mode(PairMode::PAIR_MODE_LOCAL, (uint32_t)Settings::get_ws_id());
+				}
+				else if (Settings::cloud_ws_profile_ready())
+				{
+					// Stay locked on configured Cloud NVS station; do not enter blind auto-pair scan that would overwrite Local NVS
+					ESP_LOGI(TAG, "Fallback: Staying locked on configured Cloud NVS station (0x%08X)",
+						(unsigned int)Settings::get_cloud_ws_id());
+				}
+				else
+				{
 #if !FALLBACK_ENABLE_PHASE_3_WS1001
-				_fallback_phase = AutoFallbackPhase::PHASE_WS1300_SWEEP;
-				ESP_LOGW(TAG, "Fallback: Advancing directly to Phase 4 (WS1300 Sweep, 16 min) [Phase 3 bypassed]");
-				g_sniff_slot = 1; // start on CH0 (slot 1)
-				apply_pair_mode(PairMode::PAIR_MODE_SCAN, 0, -1, WsType::WS_TYPE_1300);
+					_fallback_phase = AutoFallbackPhase::PHASE_WS1300_SWEEP;
+					ESP_LOGW(TAG, "Fallback: Advancing directly to Phase 4 (WS1300 Sweep, 16 min) [Phase 3 bypassed]");
+					g_sniff_slot = 1; // start on CH0 (slot 1)
+					apply_pair_mode(PairMode::PAIR_MODE_SCAN, 0, -1, WsType::WS_TYPE_1300);
 #else
-				_fallback_phase = AutoFallbackPhase::PHASE_WS1001_SCAN;
-				ESP_LOGI(TAG, "Fallback: Advancing to Phase 3 (Dedicated WS1001 Scan on Base 868.0 MHz FSK, 5 min)");
-				apply_pair_mode(PairMode::PAIR_MODE_SCAN, 0, 0, WsType::WS_TYPE_1001);
+					_fallback_phase = AutoFallbackPhase::PHASE_WS1001_SCAN;
+					ESP_LOGI(TAG, "Fallback: Advancing to Phase 3 (Dedicated WS1001 Scan on Base 868.0 MHz FSK, 5 min)");
+					apply_pair_mode(PairMode::PAIR_MODE_SCAN, 0, 0, WsType::WS_TYPE_1001);
 #endif
+				}
 			}
 			break;
 		}
@@ -2625,12 +2681,28 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 
 					if (is_paired_sta)
 					{
-						if (Ws1300Helpers::packet_verify(&inner_pkt, _state.pair_data.pubkey, sizeof(_state.pair_data.pubkey)) != WsCommon::RetRes::OK)
+						bool pubkey_valid = false;
+						for (size_t i = 0; i < sizeof(_state.pair_data.pubkey); i++)
 						{
-							ESP_LOGW(TAG, "MeshCore signed packet failed signature verification for station 0x%08X", (unsigned int)sta_id);
-							return PktStatus::BAD_DATA;
+							if (_state.pair_data.pubkey[i] != 0x00 && _state.pair_data.pubkey[i] != 0xFF)
+							{
+								pubkey_valid = true;
+								break;
+							}
 						}
-						ESP_LOGI(TAG, "MeshCore signed packet signature verified OK for station 0x%08X", (unsigned int)sta_id);
+						if (pubkey_valid)
+						{
+							if (Ws1300Helpers::packet_verify(&inner_pkt, _state.pair_data.pubkey, sizeof(_state.pair_data.pubkey)) != WsCommon::RetRes::OK)
+							{
+								ESP_LOGW(TAG, "MeshCore signed packet failed signature verification for station 0x%08X", (unsigned int)sta_id);
+								return PktStatus::BAD_DATA;
+							}
+							ESP_LOGI(TAG, "MeshCore signed packet signature verified OK for station 0x%08X", (unsigned int)sta_id);
+						}
+						else
+						{
+							ESP_LOGW(TAG, "MeshCore signed packet accepted without ECDSA verification for station 0x%08X (no pubkey stored)", (unsigned int)sta_id);
+						}
 
 						WsFields::FieldPack f_pack = {};
 						WsGps::GpsData g_data = {};
@@ -2640,16 +2712,37 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 							return PktStatus::BAD_DATA;
 						}
 
+						if (f_pack.ts == 0)
+						{
+							u32 sta_ts = 0;
+							if (WsFields::get_field_val_from_pack(&f_pack, WsFields::FieldType::WEATHER_TS, NULL, &sta_ts) == WsCommon::RetRes::OK && sta_ts > 0)
+							{
+								f_pack.ts = sta_ts;
+							}
+							else if (DatetimeRtc::cur_time_valid())
+							{
+								f_pack.ts = (uint32_t)time(NULL);
+							}
+						}
+
 						WsData::update_precip_rate_params(&f_pack);
 						if (WsData::add(&f_pack) == WsCommon::RetRes::OK)
 						{
 							ESP_LOGI(TAG, "MeshCore signed observation added to buffer for paired station 0x%08X", (unsigned int)sta_id);
+							if (!f_pack.bad_values_detected && Settings::get_pair_mode() != PairMode::PAIR_MODE_OFF)
+							{
+								GlobalEvents::publish(GlobalEvents::EventId::WS_DATA_RECEIVED, &f_pack, sizeof(f_pack));
+							}
 							return PktStatus::OK;
 						}
 						else
 						{
 							ESP_LOGW(TAG, "Failed to add MeshCore signed observation to buffer (buffer full?)");
-							return PktStatus::BAD_DATA;
+							if (!f_pack.bad_values_detected && Settings::get_pair_mode() != PairMode::PAIR_MODE_OFF)
+							{
+								GlobalEvents::publish(GlobalEvents::EventId::WS_DATA_RECEIVED, &f_pack, sizeof(f_pack));
+							}
+							return PktStatus::OK;
 						}
 					}
 					else
@@ -2707,6 +2800,10 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 							else
 							{
 								ESP_LOGW(TAG, "Failed to add MeshCore observation to buffer (buffer full?)");
+							}
+							if (!mc_pack.bad_values_detected && Settings::get_pair_mode() != PairMode::PAIR_MODE_OFF)
+							{
+								GlobalEvents::publish(GlobalEvents::EventId::WS_DATA_RECEIVED, &mc_pack, sizeof(mc_pack));
 							}
 							return PktStatus::OK;
 						}
@@ -3096,6 +3193,7 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 				set_cur_station_obj(active_station->TYPE);
 				g_receiver_profile = active_station->TYPE;
 				g_sniff_mode_enabled = false; // Turn off sniff mode once paired
+				g_manual_listen_slot = -1;    // Clear manual diagnostic channel lock once paired
 
 				bool is_cloud_match = (Settings::cloud_ws_profile_ready() &&
 					(uint32_t)Settings::get_cloud_ws_id() == pair_data.id);
@@ -3200,6 +3298,12 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 					set_radio_freq(Settings::get_freq_region());
 					sx126x_rx_cont();
 				}
+
+				// This packet just paired the station; treat it as paired station
+				// traffic so signal metrics, telemetry buffer, and the TFT LCD
+				// update immediately on this packet instead of waiting for the next.
+				foreign_packet = false;
+				is_paired = (Settings::get_pair_mode() != PairMode::PAIR_MODE_OFF);
 			}
 		}
 
@@ -3380,7 +3484,7 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 				? ((Ws1300::ByteBuffer::StaAdv*)pkt_received.pl)->sn
 				: ((Ws1300::ByteBuffer::StaBoot*)pkt_received.pl)->sn;
 
-			// If current pairing profile has a placeholder/empty pubkey, upgrade it immediately
+			// If current pairing profile has a placeholder/empty/changed pubkey or synthesized/blank/changed SN, upgrade it immediately
 			bool cur_has_pubkey = false;
 			for (size_t i = 0; i < sizeof(_state.pair_data.pubkey); i++)
 			{
@@ -3390,15 +3494,65 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 					break;
 				}
 			}
-			if (!cur_has_pubkey)
+			bool cur_sn_blank_or_synth = (_state.pair_data.sn[4] == 0xAA &&
+			                              _state.pair_data.sn[5] == 0x55 &&
+			                              _state.pair_data.sn[6] == 0xAA &&
+			                              _state.pair_data.sn[7] == 0x55);
+			if (!cur_sn_blank_or_synth)
 			{
-				ESP_LOGI(TAG, "WS1300: Upgrading unverified pairing profile with authentic ECDSA public key from %s packet!",
+				bool all_zero = true;
+				bool all_ff = true;
+				for (size_t i = 0; i < sizeof(_state.pair_data.sn); i++)
+				{
+					if (_state.pair_data.sn[i] != 0x00) all_zero = false;
+					if (_state.pair_data.sn[i] != 0xFF) all_ff = false;
+				}
+				cur_sn_blank_or_synth = all_zero || all_ff;
+			}
+			bool pk_or_sn_diff = (memcmp(_state.pair_data.pubkey, new_pk, sizeof(_state.pair_data.pubkey)) != 0) ||
+			                     (memcmp(_state.pair_data.sn, new_sn, sizeof(_state.pair_data.sn)) != 0);
+			if (!cur_has_pubkey || cur_sn_blank_or_synth || pk_or_sn_diff)
+			{
+				ESP_LOGI(TAG, "WS1300: Upgrading pairing profile with authentic SN + ECDSA public key from %s packet!",
 					ws1300_type == Ws1300::StaPacketType::ADV ? "ADV" : "BOOT");
 				memcpy(_state.pair_data.pubkey, new_pk, sizeof(_state.pair_data.pubkey));
 				memcpy(_state.pair_data.sn, new_sn, sizeof(_state.pair_data.sn));
-				Settings::set_ws_pubkey((u8*)new_pk, sizeof(_state.pair_data.pubkey));
-				Settings::set_ws_sn((u8*)new_sn, sizeof(_state.pair_data.sn));
-				Settings::commit();
+				bool saved_any = false;
+				if (_active_pair_source == PairSource::PAIR_SOURCE_LOCAL ||
+				    (uint32_t)Settings::get_ws_id() == _state.pair_data.id)
+				{
+					Settings::set_ws_pubkey((u8*)new_pk, sizeof(_state.pair_data.pubkey));
+					Settings::set_ws_sn((u8*)new_sn, sizeof(_state.pair_data.sn));
+					saved_any = true;
+				}
+				if (_active_pair_source == PairSource::PAIR_SOURCE_CLOUD ||
+				    (Settings::get_cloud_ws_valid() && (uint32_t)Settings::get_cloud_ws_id() == _state.pair_data.id))
+				{
+					Settings::set_cloud_ws_pubkey((u8*)new_pk, sizeof(_state.pair_data.pubkey));
+					Settings::set_cloud_ws_sn((u8*)new_sn, sizeof(_state.pair_data.sn));
+					saved_any = true;
+				}
+				if (saved_any)
+				{
+					Settings::commit();
+				}
+			}
+
+			// Whenever the paired WS1300 transmits ADV or BOOT, arm the GPS ownership challenge
+			// so its next SENSORS packet automatically verifies ownership without needing manual UI action.
+			if (!g_ownership_confirmed || ws1300_type == Ws1300::StaPacketType::ADV)
+			{
+				g_ownership_challenge_armed = true;
+				g_ownership_challenge_pending = false;
+				g_ownership_confirmed = false;
+				g_ownership_challenge_station_id = _state.pair_data.id;
+				g_ownership_challenge_started_sec = Utils::get_tick_sec();
+				g_ownership_challenge_packets_seen = 0;
+				_state.gps_last_req_ts_sec = 0;
+				_state.gps_req_attempts = 0;
+				ESP_LOGI(TAG, "WS1300: Armed GPS ownership challenge after receiving %s from 0x%08X",
+					ws1300_type == Ws1300::StaPacketType::ADV ? "ADV" : "BOOT",
+					(unsigned int)_state.pair_data.id);
 			}
 		}
 	}
@@ -3452,19 +3606,31 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 			                      : (uint32_t)time(NULL);
 			Settings::set_station_ownership_confirmed(true, _state.pair_data.id, own_ts);
 
-			// Confirm ownership: store strictly to Local NVS, preserving Cloud NVS!
+			// Confirm ownership: store to Local NVS, and sync credentials to Cloud NVS if targeting Cloud
 			Settings::set_ws_id(_state.pair_data.id);
 			Settings::set_ws_pubkey(_state.pair_data.pubkey, WS_PUB_KEY_LEN);
 			Settings::set_ws_sn(_state.pair_data.sn, WS_SN_LEN);
 			Settings::set_ws_type(active_station->TYPE);
-			Settings::set_pair_source(PairSource::PAIR_SOURCE_LOCAL);
-			Settings::set_pair_mode(PairMode::PAIR_MODE_LOCAL);
+			if (_active_pair_source == PairSource::PAIR_SOURCE_CLOUD ||
+			    (Settings::get_cloud_ws_valid() && (uint32_t)Settings::get_cloud_ws_id() == _state.pair_data.id))
+			{
+				Settings::set_cloud_ws_pubkey(_state.pair_data.pubkey, WS_PUB_KEY_LEN);
+				Settings::set_cloud_ws_sn(_state.pair_data.sn, WS_SN_LEN);
+			}
+			if (_active_pair_source != PairSource::PAIR_SOURCE_CLOUD)
+			{
+				Settings::set_pair_source(PairSource::PAIR_SOURCE_LOCAL);
+				Settings::set_pair_mode(PairMode::PAIR_MODE_LOCAL);
+			}
 			Settings::commit();
 
-			_fallback_phase = AutoFallbackPhase::PHASE_LATCHED;
+			if (_fallback_phase != AutoFallbackPhase::PHASE_MANUAL)
+			{
+				_fallback_phase = AutoFallbackPhase::PHASE_LATCHED;
+			}
 
 			ESP_LOGW(TAG,
-				"Station ownership confirmed by GPS response for 0x%08X after %u packet(s); saved to Local NVS (cloud preserved)",
+				"Station ownership confirmed by GPS response for 0x%08X after %u packet(s); saved to NVS",
 				(unsigned int)_state.pair_data.id,
 				(unsigned int)g_ownership_challenge_packets_seen);
 		}
@@ -3633,10 +3799,16 @@ PktStatus handle_packet_impl(PacketQueueMsg* pkt_msg, PacketCounterSample* count
 				(Settings::get_pair_mode() != PairMode::PAIR_MODE_OFF) &&
 				!foreign_packet;
 
-			// Strictly only publish weather events for the paired station's data
-			if (paired_and_not_foreign)
+			// Strictly only publish weather events for the paired station's telemetry data.
+			// Non-telemetry packets (WS1300 ADV/BOOT/GNSS) contain only META fields and would
+			// overwrite the valid weather FieldPack on the TFT LCD and in WeatherLogger.
+			if (paired_and_not_foreign && telemetry_pkt)
 			{
 				GlobalEvents::publish(GlobalEvents::EventId::WS_DATA_RECEIVED, &field_pack, sizeof(field_pack));
+			}
+			else if (!telemetry_pkt)
+			{
+				ESP_LOGI(TAG, "Skipping WS_DATA_RECEIVED publish for non-telemetry packet (META-only).");
 			}
 			else
 			{
@@ -5002,6 +5174,67 @@ RetResult apply_pair_mode(PairMode mode, uint32_t scan_target_id,
 
 		case PairMode::PAIR_MODE_CLOUD:
 		{
+			if(!Settings::cloud_ws_profile_ready() &&
+			   Settings::get_cloud_ws_valid() &&
+			   Settings::get_cloud_ws_id() > 0 &&
+			   Settings::get_cloud_ws_type() == WsType::WS_TYPE_1300)
+			{
+				uint32_t cloud_id = (uint32_t)Settings::get_cloud_ws_id();
+				if(Settings::local_ws_profile_ready() &&
+				   (uint32_t)Settings::get_ws_id() == cloud_id)
+				{
+					uint8_t local_sn[WS_SN_LEN] = {0};
+					uint8_t local_pubkey[WS_PUB_KEY_LEN] = {0};
+					if(Settings::get_ws_sn(local_sn, sizeof(local_sn)) == RET_OK)
+					{
+						Settings::set_cloud_ws_sn(local_sn, sizeof(local_sn));
+					}
+					if(Settings::get_ws_pubkey(local_pubkey, sizeof(local_pubkey)) == RET_OK)
+					{
+						Settings::set_cloud_ws_pubkey(local_pubkey, sizeof(local_pubkey));
+					}
+				}
+				else
+				{
+					RecentStation recent[RECENT_STATIONS_CAPACITY] = {};
+					size_t recent_count = get_recent_stations(recent, RECENT_STATIONS_CAPACITY);
+					for(size_t i = 0; i < recent_count; i++)
+					{
+						if(recent[i].id == cloud_id)
+						{
+							uint8_t ws_sn[WS_SN_LEN] = {0};
+							if(recent[i].has_sn)
+							{
+								memcpy(ws_sn, recent[i].sn, sizeof(ws_sn));
+							}
+							else if(recent[i].channel_slot <= 8)
+							{
+								ws_sn[0] = (uint8_t)((cloud_id >> 24) & 0xFF);
+								ws_sn[1] = (uint8_t)((cloud_id >> 16) & 0xFF);
+								ws_sn[2] = (uint8_t)((cloud_id >> 8) & 0xFF);
+								ws_sn[3] = (uint8_t)(cloud_id & 0xFF);
+								ws_sn[4] = 0xAA;
+								ws_sn[5] = 0x55;
+								ws_sn[6] = 0xAA;
+								ws_sn[7] = 0x55;
+								ws_sn[8] = 0x00;
+								ws_sn[9] = (recent[i].channel_slot > 0)
+									? (uint8_t)(recent[i].channel_slot - 1) : 0;
+							}
+							if(recent[i].has_sn || recent[i].channel_slot <= 8)
+							{
+								Settings::set_cloud_ws_sn(ws_sn, sizeof(ws_sn));
+							}
+							if(recent[i].has_pubkey)
+							{
+								Settings::set_cloud_ws_pubkey(recent[i].pubkey, sizeof(recent[i].pubkey));
+							}
+							break;
+						}
+					}
+				}
+			}
+
 			WsType station_type = WsType::WS_TYPE_NONE;
 			WsBase::PairData pair_data = {};
 			if(load_station_profile(PairSource::PAIR_SOURCE_CLOUD, &station_type, &pair_data))
@@ -5012,6 +5245,27 @@ RetResult apply_pair_mode(PairMode mode, uint32_t scan_target_id,
 				g_receiver_profile = station_type;
 				unlock_state();
 				set_pair_state(PairState::PAIRED, &pair_data);
+				if (station_type == WsType::WS_TYPE_1300)
+				{
+					if (Settings::is_station_ownership_confirmed() &&
+					    Settings::get_station_ownership_id() == pair_data.id)
+					{
+						g_ownership_confirmed = true;
+						g_ownership_challenge_armed = false;
+						g_ownership_challenge_pending = false;
+					}
+					else
+					{
+						g_ownership_confirmed = false;
+						g_ownership_challenge_armed = true;
+						g_ownership_challenge_pending = false;
+						g_ownership_challenge_station_id = pair_data.id;
+						g_ownership_challenge_started_sec = Utils::get_tick_sec();
+						g_ownership_challenge_packets_seen = 0;
+						_state.gps_last_req_ts_sec = 0;
+						_state.gps_req_attempts = 0;
+					}
+				}
 			}
 			lock_state();
 			// Auto-pair fallback is only active if neither cloud nor local profile exists
@@ -5034,6 +5288,27 @@ RetResult apply_pair_mode(PairMode mode, uint32_t scan_target_id,
 				g_receiver_profile = station_type;
 				unlock_state();
 				set_pair_state(PairState::PAIRED, &pair_data);
+				if (station_type == WsType::WS_TYPE_1300)
+				{
+					if (Settings::is_station_ownership_confirmed() &&
+					    Settings::get_station_ownership_id() == pair_data.id)
+					{
+						g_ownership_confirmed = true;
+						g_ownership_challenge_armed = false;
+						g_ownership_challenge_pending = false;
+					}
+					else
+					{
+						g_ownership_confirmed = false;
+						g_ownership_challenge_armed = true;
+						g_ownership_challenge_pending = false;
+						g_ownership_challenge_station_id = pair_data.id;
+						g_ownership_challenge_started_sec = Utils::get_tick_sec();
+						g_ownership_challenge_packets_seen = 0;
+						_state.gps_last_req_ts_sec = 0;
+						_state.gps_req_attempts = 0;
+					}
+				}
 			}
 			lock_state();
 			g_auto_pair_enabled = false;
@@ -5445,6 +5720,12 @@ RetResult set_pair_state(PairState state, WsBase::PairData* pair_data, bool wipe
 				_state.pair_data.id = pair_data->id;
 				memcpy(_state.pair_data.sn, pair_data->sn, sizeof(_state.pair_data.sn));
 				memcpy(_state.pair_data.pubkey, pair_data->pubkey, sizeof(_state.pair_data.pubkey));
+				_paired_base_fallback = false;
+				_paired_channel_locked = false;
+				_paired_freq_confirmed = false;
+				_paired_confirmed_on_base = false;
+				_paired_station_interval_sec = 20;
+				_paired_miss_streak = 0;
 				Settings::commit();
 			}
 		}
@@ -5460,6 +5741,7 @@ RetResult set_pair_state(PairState state, WsBase::PairData* pair_data, bool wipe
 		if(pair_data == nullptr) return RET_INVALID_PARAMS;
 
 		_state.pair_state = PairState::PAIRED;
+		g_manual_listen_slot = -1;
 		if(_active_pair_source == PairSource::PAIR_SOURCE_CLOUD)
 		{
 			Settings::set_cloud_ws_id(pair_data->id);

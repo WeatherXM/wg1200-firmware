@@ -3,6 +3,17 @@
 Documentation-level changelog for the pairing-mode rework. Release-level entries
 live in the repository root [CHANGELOG.md](../CHANGELOG.md).
 
+## [0.8.39] - 2026-10-26
+
+### Major Features & Improvements (v0.8.38 – v0.8.39)
+
+| Area | What actually made it into v0.8.39 |
+|---|---|
+| **Boot Mode & Manual Target Persistence** | Fixed `WsHandler::init()` and `process_fallback_state_machine()` so gateways configured in `PAIR_MODE_CLOUD` boot directly into the Cloud profile (`PHASE_CLOUD_NVS`), stay locked to configured NVS or manual target stations (`PHASE_MANUAL`), and never overwrite Local NVS with a neighboring station during fallback. Added `POST /clear_local` (**CLEAR LOCAL**) to wipe stale Local NVS profiles. |
+| **Multi-Gateway Diagnostics & Ownership Sync** | Unified `STATION LINK` and `STATION OWNERSHIP` badges across Dashboard and Settings tabs, cleared manual channel lock (`g_manual_listen_slot`) upon pairing, added a **Manual Channel Lock Active** warning banner, added `PK ✓` / `No PK` badges on discovered stations, and added a downlink collision / foreign-gateway pairing warning when `ownership_status === 'failed'` with a valid Public Key. |
+| **Cross-Station Precipitation Protection & Chart Accuracy** | Tracked `_precip_rate_station_id` and `_daily_precip_station_id` in `WsData::update_precip_rate_params()` so switching stations mid-day resets rate tracking and re-anchors the daily rain baseline without cross-station counter jumps. Added dry-period decay reset (`>= 3600s`), physical sanity bounds (`300 mm/h`), historical CSV outlier repair, and accurate `Wet Time` calculation (`PrecipAccum_mm > 0`). |
+| **Station Credential Adoption & LCD Hydration** | Adopted authentic 10-byte serial numbers and Ed25519 public keys from `BOOT`/`ADV` frames when a stored profile has a synthesized channel-hint serial, hydrated the TFT LCD display immediately from `WsData` on pair, and tightened Meshtastic/WS1300/WS1001 packet log filters. |
+
 ## [0.8.37] - 2026-10-22
 
 ### Major Features & Improvements (v0.8.28 – v0.8.37)

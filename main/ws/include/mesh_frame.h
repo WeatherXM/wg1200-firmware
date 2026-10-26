@@ -588,6 +588,10 @@ namespace MeshFrame
 			}
 		}
 
+		if (out->portnum == 0 || out->portnum > 512 || app_payload == nullptr || app_payload_len == 0) {
+			return false;
+		}
+
 		if (app_payload != nullptr && app_payload_len > 0) {
 			const uint8_t *ap_ptr = app_payload;
 			const uint8_t *ap_end = app_payload + app_payload_len;

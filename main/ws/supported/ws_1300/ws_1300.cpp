@@ -91,24 +91,29 @@ WsCommon::RetRes packet_handler(WsBase::GwCtx* gw_ctx, WsCommon::Packet* pkt_rec
 			if(memcmp(gw_ctx->paired_info.sn, sta_adv->sn, sizeof(gw_ctx->paired_info.sn)) != 0)
 			{
 				// The 4-byte station_id matched but the full serial differs.
-				// Only adopt the ADV's serial if ours was never set (all
-				// 0xFF, e.g. cloud pairing provided just the id) - otherwise
-				// this is a foreign station whose id collides with ours and
-				// it must not overwrite the stored credentials.
-				bool sn_was_blank = true;
+				// Adopt the ADV's serial if ours was never set (all 0xFF or all
+				// 0x00, e.g. cloud pairing provided just the id) or was a
+				// synthesized channel-hint serial (AA55AA55) - otherwise this
+				// is a foreign station whose id collides with ours and it must
+				// not overwrite the stored credentials.
+				bool sn_all_ff = true;
+				bool sn_all_zero = true;
 				for(size_t i = 0; i < sizeof(gw_ctx->paired_info.sn); i++)
 				{
-					if(gw_ctx->paired_info.sn[i] != 0xFF)
-					{
-						sn_was_blank = false;
-						break;
-					}
+					if(gw_ctx->paired_info.sn[i] != 0xFF) sn_all_ff = false;
+					if(gw_ctx->paired_info.sn[i] != 0x00) sn_all_zero = false;
 				}
+				bool sn_synthesized = (sizeof(gw_ctx->paired_info.sn) >= 8 &&
+					gw_ctx->paired_info.sn[4] == 0xAA &&
+					gw_ctx->paired_info.sn[5] == 0x55 &&
+					gw_ctx->paired_info.sn[6] == 0xAA &&
+					gw_ctx->paired_info.sn[7] == 0x55);
+				bool sn_was_blank = sn_all_ff || sn_all_zero || sn_synthesized;
 				if(!sn_was_blank)
 				{
 					return WsCommon::RetRes::ERROR_BAD_ID;
 				}
-				ESP_LOGW(TAG, "Paired station SN was blank. Adopting SN from ADV.");
+				ESP_LOGW(TAG, "Paired station SN was placeholder/blank. Adopting authentic SN from ADV.");
 			}
 
 			// A changed public key with a matching full serial means the

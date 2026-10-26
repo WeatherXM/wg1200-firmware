@@ -1,7 +1,7 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
-#define APP_VERSION_BASE "0.8.37"
+#define APP_VERSION_BASE "0.8.39"
 
 
 #if __has_include("build_version.h")
